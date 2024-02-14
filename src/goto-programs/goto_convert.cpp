@@ -1114,30 +1114,9 @@ void goto_convertt::convert_cpp_delete(const codet &code, goto_programt &dest)
 
   // preserve the call
   goto_programt::targett t_f = dest.add_instruction(OTHER);
-  t_f->code = code_cpp_delete2tc(tmp_op2);
   t_f->location = code.location();
-
-  // now do "delete"
-  exprt valid_expr("valid_object", bool_typet());
-  valid_expr.copy_to_operands(tmp_op);
-
-  // clear alloc bit
-  exprt assign = code_assignt(valid_expr, false_exprt());
-  expr2tc assign2;
-  migrate_expr(assign, assign2);
-  goto_programt::targett t_c = dest.add_instruction(ASSIGN);
-  t_c->code = assign2;
-  t_c->location = code.location();
-
-  exprt deallocated_expr("deallocated_object", bool_typet());
-  deallocated_expr.copy_to_operands(tmp_op);
-
-  //indicate that memory has been deallocated
-  assign = code_assignt(deallocated_expr, true_exprt());
-  migrate_expr(assign, assign2);
-  goto_programt::targett t_d = dest.add_instruction(ASSIGN);
-  t_d->code = assign2;
-  t_d->location = code.location();
+  t_f->code = code.statement() == "cpp_delete" ? code_cpp_delete2tc(tmp_op2)
+                                               : code_cpp_del_array2tc(tmp_op2);
 }
 
 void goto_convertt::convert_assert(const codet &code, goto_programt &dest)

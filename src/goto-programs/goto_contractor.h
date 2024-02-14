@@ -38,17 +38,14 @@ private:
 
 public:
   size_t getIndex() const;
-
   vart();
-
-public:
   vart(const string &varName, const expr2tc &symbol, const size_t &index);
   const ibex::Interval &getInterval() const;
   void setInterval(const ibex::Interval &interval);
   bool isIntervalChanged() const;
   void setIntervalChanged(bool intervalChanged);
   const expr2tc &getSymbol() const;
-  void dump();
+  void dump() const;
 };
 
 class Contractor
@@ -405,6 +402,23 @@ public:
   {
     return is_empty_vector;
   }
+  void dump()
+  {
+    std::ostringstream oss;
+    oss << "This map has : " << this->n;
+    if (is_empty_vector)
+    {
+      oss << "empty vector";
+      log_status("{}", oss.str());
+      return;
+    }
+    log_status("{}", oss.str());
+
+    for (const auto &var : var_map)
+    {
+      var.second.dump();
+    }
+  }
 };
 //-----------------------------------------------------------------------------------------------------------------
 /// This class will parse ESBMC expressions to ibex expressions:
@@ -640,8 +654,7 @@ public:
     else if (map.var_map.size() == 0)
       return false;
 
-    ibex::CtcFixPoint *f = new ibex::CtcFixPoint(*c);
-    contractor = Contractor(f);
+    contractor = Contractor(c);
     return true;
   }
 
@@ -649,9 +662,9 @@ public:
 
   void apply_contractor();
 
-  expr2tc result_of_outer(expr2tc exp);
+  expr2tc result_of_outer();
 
-  void dump();
+  void dump(bool is_timed);
 
   [[maybe_unused]] void modularize_intervals();
 
