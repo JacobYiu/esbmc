@@ -41,6 +41,7 @@ protected:
   // handle the non-contract definition, including struct/enum/error/event/abstract/...
   bool get_noncontract_defition(nlohmann::json &ast_node);
   bool get_struct_class(const nlohmann::json &ast_node);
+  bool get_struct_tuple(const nlohmann::json &ast_node);
   void add_enum_member_val(nlohmann::json &ast_node);
   bool get_error_definition(const nlohmann::json &ast_node);
 
@@ -55,6 +56,7 @@ protected:
   bool get_access_from_decl(
     const nlohmann::json &ast_node,
     struct_typet::componentt &comp);
+  bool get_tuple_identifier(const nlohmann::json &ast_node, struct_typet &type);
   bool get_block(
     const nlohmann::json &expr,
     exprt &
@@ -80,6 +82,7 @@ protected:
   bool get_var_decl_ref(const nlohmann::json &decl, exprt &new_expr);
   bool get_func_decl_ref(const nlohmann::json &decl, exprt &new_expr);
   bool get_enum_member_ref(const nlohmann::json &decl, exprt &new_expr);
+  bool get_element_ref(const nlohmann::json &decl, exprt &new_expr);
   bool get_decl_ref_builtin(const nlohmann::json &decl, exprt &new_expr);
   bool get_type_description(const nlohmann::json &type_name, typet &new_type);
   bool get_func_decl_ref_type(const nlohmann::json &decl, typet &new_type);

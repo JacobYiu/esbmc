@@ -2,6 +2,7 @@
 #include <fmt/core.h>
 #include <set>
 #include <util/message.h>
+#include <iostream>
 
 #define ENUM_TO_STR(s)                                                         \
   case s:                                                                      \
@@ -109,6 +110,8 @@ ContractBodyElementT get_contract_body_element_t(const nlohmann::json &element)
   }
   else
   {
+    std::cout << "Testing 10" << std::endl;
+
     log_error(
       "Got contract-body-element nodeType={}. Unsupported "
       "contract-body-element type",
@@ -145,16 +148,30 @@ TypeNameT get_type_name_t(const nlohmann::json &type_name)
   if (type_name.contains("typeString"))
   {
     // for AST node that contains ["typeName"]["typeDescriptions"]
+    
     const std::string typeString = type_name["typeString"].get<std::string>();
     const std::string typeIdentifier =
       type_name["typeIdentifier"].get<std::string>();
+    
+    // std::cout << "typeString is " << typeString << std::endl; 
+    // std::cout << "typeIdentifier is " << typeIdentifier << std::endl; 
 
     // we must first handle tuple
     // otherwise we might parse tuple(literal_string, literal_string)
     // as ElementaryTypeName
-    if (typeString.substr(0, 6) == "tuple(" && typeString != "tuple()")
+    if (typeString.substr(0, 6) == "tuple(")
     {
-      return TupleTypeName;
+      if(typeString != "tuple()")
+      {
+        return TupleTypeName;
+      }
+
+      // else
+      // {
+      //   std::cout << "tuple() found" << std::endl;
+      //   return TupleTypeName;
+      //   // abort();
+      // }
     }
     else if (typeIdentifier.find("t_array$") != std::string::npos)
     {
@@ -234,6 +251,7 @@ TypeNameT get_type_name_t(const nlohmann::json &type_name)
     }
     else
     {
+      std::cout << "Testing 1 " << std::endl;
       log_error(
         "Got type-name typeString={}. Unsupported type-name type",
         type_name["typeString"].get<std::string>());
@@ -250,6 +268,7 @@ TypeNameT get_type_name_t(const nlohmann::json &type_name)
     }
     else
     {
+      std::cout << "typeIdentifier is " << type_name["typeIdentifier"] << std::endl;
       log_error(
         "Got type-name nodeType={}. Unsupported type-name type",
         type_name["nodeType"].get<std::string>());
@@ -344,6 +363,7 @@ ElementaryTypeNameT get_elementary_type_name_t(const nlohmann::json &type_name)
     //    bytes memory
     return BYTES;
   }
+  std::cout << "Testing 2" << std::endl;
   log_error(
     "Got elementary-type-name typeString={}. Unsupported "
     "elementary-type-name type",
@@ -537,6 +557,7 @@ BlockT get_block_t(const nlohmann::json &block)
   }
   else
   {
+    std::cout << "Testing 3" << std::endl;
     log_error(
       "Got block nodeType={}. Unsupported block type",
       block["nodeType"].get<std::string>());
@@ -610,6 +631,7 @@ StatementT get_statement_t(const nlohmann::json &stmt)
 
   else
   {
+    std::cout << "Testing 4" << std::endl;
     log_error(
       "Got statement nodeType={}. Unsupported statement type",
       stmt["nodeType"].get<std::string>());
@@ -701,6 +723,7 @@ ExpressionT get_expression_t(const nlohmann::json &expr)
   }
   else
   {
+    std::cout << "Testing 5" << std::endl;
     log_error(
       "Got expression nodeType={}. Unsupported expression type",
       expr["nodeType"].get<std::string>());
@@ -739,6 +762,8 @@ ExpressionT get_unary_expr_operator_t(const nlohmann::json &expr, bool uo_pre)
   }
   else
   {
+    std::cout << "Testing 6" << std::endl;
+
     log_error(
       "Got expression operator={}. Unsupported expression operator",
       expr["operator"].get<std::string>());
@@ -871,6 +896,8 @@ ExpressionT get_expr_operator_t(const nlohmann::json &expr)
   }
   else
   {
+    std::cout << "Testing 7" << std::endl;
+
     log_error(
       "Got expression operator={}. Unsupported expression operator",
       expr["operator"].get<std::string>());
@@ -960,6 +987,8 @@ VarDeclStmtT get_var_decl_stmt_t(const nlohmann::json &stmt)
   }
   else
   {
+    std::cout << "Testing 8" << std::endl;
+
     log_error(
       "Got expression nodeType={}. Unsupported "
       "variable-declaration-statement operator",
@@ -1033,6 +1062,8 @@ ImplicitCastTypeT get_implicit_cast_type_t(std::string cast)
   }
   else
   {
+    std::cout << "Testing 9" << std::endl;
+
     log_error("Got implicit cast type={}. Unsupported case type", cast.c_str());
     abort();
   }
