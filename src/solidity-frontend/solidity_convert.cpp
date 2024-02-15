@@ -424,8 +424,6 @@ bool solidity_convertert::get_struct_class(const nlohmann::json &struct_def)
     return true;
   }
 
-  std::cout << "Testing before find symbol" << std::endl;
-
   // 2. Check if the symbol is already added to the context, do nothing if it is
   // already in the context.
   if (context.find_symbol(id) != nullptr)
@@ -693,10 +691,10 @@ bool solidity_convertert::get_element_ref(
 {
   assert(identifier["nodeType"] == "Identifier");
 
-  std::string contract_name, name, id;
+  std::string function_name, name, id;
 
   // 1. get contract_name, name and id
-  contract_name = current_contractName;
+  function_name = current_functionName;
   
   name =
     identifier["name"]
@@ -704,10 +702,11 @@ bool solidity_convertert::get_element_ref(
         std::
           string>(); // assume Solidity AST json object has "name" field, otherwise throws an exception in nlohmann::json
 
-  // e.g. sol:@C@Base@x#11
+  // e.g. sol:@C@@F@function_name@x#11
   // The prefix is used to avoid duplicate names
-  id = "sol:@C@" + contract_name + "@" + name + "#" +
-       i2string(identifier["id"].get<std::int16_t>()); 
+  
+  id = "sol:@C@@F@" + function_name + "@" + name + "#" + 
+        i2string(identifier["id"].get<std::int16_t>()); 
 
   std::cout << "id is " << id << std::endl; 
 
@@ -717,12 +716,18 @@ bool solidity_convertert::get_element_ref(
   // e.g. (uint age, uint money) = (....);
   if(context.find_symbol(id) != nullptr)
   {
+    std::cout << "Could not find symbol" << std::endl;
     log_error("Cannot find the declaration of the identifier");
     return true;
   }
 
   std::cout << "set new_expr to be equal to the symbol " << std::endl;
+  // symbolt temp = *context.find_symbol(id);
+  // std::cout << "temp intializeed" << std::endl;
+  // temp.dump();
   context.dump();
+
+  std::cout << "Dumped Context " << std::endl;
   //3. Set new_expr to the current symbol to be used outside the function
   //bug here
   new_expr = symbol_expr(*context.find_symbol(id));
@@ -1743,6 +1748,7 @@ bool solidity_convertert::get_expr(
       //(LHS) If true means that we JUST finished creating the struct symbol
       if(!get_struct_tuple(expr))
       {
+        //LHS
         std::cout << "Finished Creating a Struct Symbol " << std::endl;
         return false;
       }
@@ -1759,27 +1765,15 @@ bool solidity_convertert::get_expr(
       id = "sol:@C@" + current_contractName + "@" + name;
 
       std::cout << "Trying to find struct symbol " << std::endl;
-      symbolt tuple_symbol = *context.find_symbol(id);
-
+      //Get the struct that represents a tuple
+      symbolt tuple_struct = *context.find_symbol(id);
 
       
-      //get reference of struct
-      // exprt tuple_struct_components = tuple_symbol.value;
+
+      //function to loop through struct components
+        //We add in RHS values one by one in order
+        //There should not be any mismatch of types or else it will throw compiler error
       
-      // int i = 0;
-      // for(const auto &arg : expr["components"].items())
-      // {
-      //   exprt init;
-      //   //If expression already created, then don't do anything
-      //   if(get_expr(arg.value(), elem_tuple_types[i], init))
-      //     return true;
-
-      //   tuple_struct_components.operands().at(i) = init;    
-      //   i++;
-      // }
-
-      // log_error("Currently we do not handle tuple.");
-      // abort();
       break;
     }
 
