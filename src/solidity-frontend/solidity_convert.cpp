@@ -730,7 +730,8 @@ bool solidity_convertert::get_element_ref(
   std::cout << "Dumped Context " << std::endl;
   //3. Set new_expr to the current symbol to be used outside the function
   //bug here
-  new_expr = symbol_expr(*context.find_symbol(id));
+  symbolt temp = *context.find_symbol(id);
+  new_expr = symbol_expr(temp);
 
   std::cout << "Exiting the get_element_ref" << std::endl;
   return false;
