@@ -41,7 +41,7 @@ solidity_convertert::solidity_convertert(
 
 bool solidity_convertert::convert()
 {
-  // This function consists of two output:
+  // This function consists of two parts:
   //  1. First, we perform pattern-based verificaiton
   //  2. Then we populate the context with symbols annotated based on the each AST node, and hence prepare for the GOTO conversion.
 
@@ -566,6 +566,7 @@ bool solidity_convertert::get_struct_tuple(
   // Conversion of tuple to struct so tuple has no default name
   // But we still need to get unique label
   // e.g. "sol:@C@BASE@tuple#14"
+  assert(!current_contractName.empty());
   std::string label = std::to_string(struct_def["id"].get<int>());
   name = "tuple#16";
   id = "sol:@C@" + current_contractName + "@" + name;
@@ -603,8 +604,8 @@ bool solidity_convertert::get_struct_tuple(
   symbolt &added_symbol = *move_symbol_to_context(symbol);
 
   //Components consist of our variables used in our tuple
-  nlohmann::json ast_nodes;
-  ast_nodes = struct_def["components"];
+  assert(struct_def.contains("components"));
+  nlohmann::json ast_nodes = struct_def["components"];
 
   std::cout << "Populating identifiers" << std::endl;
   // 6. Populate the Identifiers 
@@ -615,53 +616,38 @@ bool solidity_convertert::get_struct_tuple(
   //   return true;
   // }
 
-  for (nlohmann::json::iterator itr = ast_nodes.begin(); itr != ast_nodes.end();
-      ++itr)
+  for (unsigned int i = 0; i < ast_nodes.size(); i++)
+  
   {
     //nodeType of the components
+    struct_typet::componentt comp;
     SolidityGrammar::ExpressionT type = 
-      SolidityGrammar::get_expression_t(*itr);
+      SolidityGrammar::get_expression_t(ast_nodes.at(i));
     
-    std::cout << "itr is " << *itr << std::endl;
-
     // You can use tuple assignments with: 
     //    - Primitive Types (Identifier): Such as uint, bool, address, bytes, string, etc.
     //    - Arrays          (IndexAccess)
     //    - Mappings        (IndexAccess)
     //    - Struct Instances(MemberAccess)
 
-    switch(type)
-    {
-      case (SolidityGrammar::ExpressionT::DeclRefExprClass):
-      {
-        std::cout << "DeclRefExprClass" << std::endl;
-        get_tuple_identifier(*itr, t);
-        break;
-      }
-      case (SolidityGrammar::ExpressionT::StructMemberCall):
-      {
-        // get_struct_identifier(*itr, t);
-        assert(!"Unsupported IndexAccess for Arrays/Mappings");
-        break;
-      }
-      case (SolidityGrammar::ExpressionT::IndexAccess):
-      {
-        // get_index_identifier(*itr, t);
-        assert(!"Unsupported Member Access for Struct Instances");
-        break;
-      }
-      default:
-      {
-        log_error("Unsupported Tuple Component Type");
-        return true;
-      }
-    }
+    assert(type == SolidityGrammar::ExpressionT::DeclRefExprClass ||
+           type == SolidityGrammar::ExpressionT::StructMemberCall ||
+           type == SolidityGrammar::ExpressionT::IndexAccess);
 
-    // std::cout << "Finished adding a component to the struct" << std::endl;
+    std::cout << "itr is " << ast_nodes.at(i) << std::endl;
+
+    if(get_expr(ast_nodes.at(i), ast_nodes.at(i)["typeDescriptions"], comp))
+      return true;
+
+    t.components().push_back(comp);
+
+    std::cout << "Finished adding a component to the struct" << std::endl;
   }
 
   t.location() = location_begin;
   added_symbol.type = t;
+  std::cout << "Dumping struct" << std::endl;
+  t.dump();
 
   return false;
 }
@@ -721,7 +707,6 @@ bool solidity_convertert::get_element_ref(
   // e.g. (uint age, uint money) = (....);
   if(context.find_symbol(id) != nullptr)
   {
-    std::cout << "Could not find symbol" << std::endl;
     log_error("Cannot find the declaration of the identifier\n");
     return true;
   }
@@ -1762,6 +1747,7 @@ bool solidity_convertert::get_expr(
       
       //RHS 
       std::cout << "Populating Struct " << std::endl;
+      assert(!current_contractName.empty());
       
       std::string label = std::to_string(expr["id"].get<int>());
       std::string name, id;
@@ -2835,7 +2821,7 @@ bool solidity_convertert::get_func_decl_ref(
   exprt &new_expr)
 {
   // Function to configure new_expr that has a +ve referenced id, referring to a function declaration
-  // This allow to get func syfmbol before we add it to the symbol table
+  // This allow to get func symbol before we add it to the symbol table
   assert(decl["nodeType"] == "FunctionDefinition");
   std::string name, id;
   get_function_definition_name(decl, name, id);
