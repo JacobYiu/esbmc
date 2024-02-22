@@ -567,9 +567,9 @@ bool solidity_convertert::get_struct_tuple(
   // But we still need to get unique label
   // e.g. "sol:@C@BASE@tuple#14"
   std::string label = std::to_string(struct_def["id"].get<int>());
-  name = "tuple#" + label;
+  name = "tuple#16";
   id = "sol:@C@" + current_contractName + "@" + name;
-
+  std::cout << "Printing tuple id " << id << std::endl;
   t.tag(id);  
 
   // 2. Check if the struct symbol is already added to the context, do nothing if it is
@@ -578,6 +578,12 @@ bool solidity_convertert::get_struct_tuple(
   {
     std::cout << "Found Struct Symbol " << std::endl;
     return false;  
+  }
+
+  else
+  {
+    // context.dump();
+    std::cout << "Have not been able to find a struct symbol..Creating " << std::endl;
   }
 
   // 3. populate location
@@ -651,7 +657,7 @@ bool solidity_convertert::get_struct_tuple(
       }
     }
 
-    std::cout << "Finished adding a component to the struct" << std::endl;
+    // std::cout << "Finished adding a component to the struct" << std::endl;
   }
 
   t.location() = location_begin;
@@ -704,8 +710,7 @@ bool solidity_convertert::get_element_ref(
 
   // e.g. sol:@C@@F@function_name@x#11
   // The prefix is used to avoid duplicate names
-  
-  id = "sol:@C@@F@" + function_name + "@" + name + "#" + 
+  id = "sol:@C@" + current_contractName + "@F@" + function_name + "@" + name + "#" + 
         i2string(identifier["id"].get<std::int16_t>()); 
 
   std::cout << "id is " << id << std::endl; 
@@ -717,21 +722,19 @@ bool solidity_convertert::get_element_ref(
   if(context.find_symbol(id) != nullptr)
   {
     std::cout << "Could not find symbol" << std::endl;
-    log_error("Cannot find the declaration of the identifier");
+    log_error("Cannot find the declaration of the identifier\n");
     return true;
   }
 
+  // context.dump();
   std::cout << "set new_expr to be equal to the symbol " << std::endl;
-  // symbolt temp = *context.find_symbol(id);
-  // std::cout << "temp intializeed" << std::endl;
-  // temp.dump();
-  context.dump();
+  // context.dump();
+  symbolt identifier_symbol = *context.find_symbol(id);
+  new_expr = symbol_expr(identifier_symbol);
 
   std::cout << "Dumped Context " << std::endl;
   //3. Set new_expr to the current symbol to be used outside the function
   //bug here
-  symbolt temp = *context.find_symbol(id);
-  new_expr = symbol_expr(temp);
 
   std::cout << "Exiting the get_element_ref" << std::endl;
   return false;
@@ -1465,8 +1468,7 @@ bool solidity_convertert::get_expr(
   get_start_location_from_stmt(expr, location);
 
   SolidityGrammar::ExpressionT type = SolidityGrammar::get_expression_t(expr);
-  log_debug(
-    "solidity",
+  log_status(
     "	@@@ got Expr: SolidityGrammar::ExpressionT::{}",
     SolidityGrammar::expression_to_str(type));
 
@@ -1747,10 +1749,12 @@ bool solidity_convertert::get_expr(
       //This function is used to create the struct class
       //(RHS) If false means that we found an existing struct symbol 
       //(LHS) If true means that we JUST finished creating the struct symbol
+      // context.dump();
       if(!get_struct_tuple(expr))
       {
         //LHS
         std::cout << "Finished Creating a Struct Symbol " << std::endl;
+        std::cout << "----------------------------------\n" << std::endl;
         return false;
       }
 
@@ -1759,16 +1763,16 @@ bool solidity_convertert::get_expr(
       //RHS 
       std::cout << "Populating Struct " << std::endl;
       
-
       std::string label = std::to_string(expr["id"].get<int>());
       std::string name, id;
       name = "tuple#" + label;
       id = "sol:@C@" + current_contractName + "@" + name;
 
-      std::cout << "Trying to find struct symbol " << std::endl;
+      std::cout << "Trying to find struct symbol " << id << std::endl;
       //Get the struct that represents a tuple
       symbolt tuple_struct = *context.find_symbol(id);
 
+      tuple_struct.dump();
       
 
       //function to loop through struct components
@@ -3666,6 +3670,7 @@ void solidity_convertert::get_var_decl_name(
     assert(!current_functionName.empty());
     id = "sol:@C@" + contract_name + "@F@" + current_functionName + "@" + name +
          "#" + i2string(ast_node["id"].get<std::int16_t>());
+    log_status("Id is ", id);
   }
   else if (ast_node.contains("scope"))
   {
