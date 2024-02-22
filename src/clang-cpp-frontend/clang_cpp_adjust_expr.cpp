@@ -1,5 +1,7 @@
+#include <clang-c-frontend/typecast.h>
 #include <clang-cpp-frontend/clang_cpp_adjust.h>
 #include <util/c_sizeof.h>
+#include <util/c_types.h>
 #include <util/destructor.h>
 #include <util/expr_util.h>
 
@@ -69,6 +71,13 @@ void clang_cpp_adjust::adjust_new(exprt &expr)
     adjust_expr(initializer);
   }
 
+  if (expr.size_irep().is_not_nil())
+  {
+    exprt new_size = static_cast<const exprt &>(expr.size_irep());
+    adjust_expr(new_size);
+    expr.size(new_size);
+  }
+
   // Set sizeof and cmt_sizeof_type
   exprt size_of = c_sizeof(expr.type().subtype(), ns);
   size_of.set("#c_sizeof_type", expr.type().subtype());
@@ -121,6 +130,19 @@ void clang_cpp_adjust::adjust_cpp_member(member_exprt &expr)
   assert(comp_symb->type.is_code());
   exprt method_call = symbol_expr(*comp_symb);
   expr.swap(method_call);
+}
+
+void clang_cpp_adjust::adjust_if(exprt &expr)
+{
+  // Check all operands
+  adjust_operands(expr);
+
+  // If the condition is not of boolean type, it must be casted
+  gen_typecast(ns, expr.op0(), bool_type());
+
+  // Typecast both the true and false results
+  gen_typecast(ns, expr.op1(), expr.type());
+  gen_typecast(ns, expr.op2(), expr.type());
 }
 
 void clang_cpp_adjust::adjust_side_effect_assign(side_effect_exprt &expr)
@@ -183,6 +205,7 @@ void clang_cpp_adjust::adjust_side_effect_assign(side_effect_exprt &expr)
     {
       convert_lvalue_ref_to_deref_sideeffect(lhs);
     }
+    adjust_expr(rhs);
   }
   else
     clang_c_adjust::adjust_side_effect(expr);

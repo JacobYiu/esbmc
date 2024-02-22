@@ -4,6 +4,7 @@ CC_DIAGNOSTIC_PUSH()
 CC_DIAGNOSTIC_IGNORE_LLVM_CHECKS()
 #include <clang/AST/Attr.h>
 #include <clang/AST/Expr.h>
+#include <clang/AST/ExprCXX.h> /* clang::TypeTraitExpr */
 #include <clang/AST/ParentMapContext.h>
 #include <clang/AST/QualTypeNames.h>
 #include <clang/AST/Type.h>
@@ -395,9 +396,6 @@ bool clang_c_convertert::get_struct_union_class(const clang::RecordDecl &rd)
     }
   }
 
-  if (get_struct_union_class_methods_decls(*rd_def, t))
-    return true;
-
   /* We successfully constructed the type of this symbol; replace the
    * symbol with the incomplete type by one with the now-complete type
    * definition.
@@ -407,7 +405,10 @@ bool clang_c_convertert::get_struct_union_class(const clang::RecordDecl &rd)
   symbolt symbol = *sym;
   context.erase_symbol(symbol.id);
   symbol.type = t;
-  context.move_symbol_to_context(symbol);
+  sym = context.move_symbol_to_context(symbol);
+
+  if (get_struct_union_class_methods_decls(*rd_def, sym->type))
+    return true;
 
   return false;
 }
@@ -807,8 +808,9 @@ bool clang_c_convertert::get_type(
   const clang::QualType &q_type,
   typet &new_type)
 {
-  const clang::Type &the_type = *q_type.getTypePtrOrNull();
-  if (get_type(the_type, new_type))
+  const clang::Type *the_type = q_type.getTypePtrOrNull();
+  assert(the_type);
+  if (get_type(*the_type, new_type))
     return true;
 
   if (q_type.isConstQualified())
@@ -1054,7 +1056,8 @@ bool clang_c_convertert::get_type(const clang::Type &the_type, typet &new_type)
     get_decl_name(rd, name, id);
 
     /* record in context if not already there */
-    get_struct_union_class(rd);
+    if (get_struct_union_class(rd))
+      return true;
 
     /* symbolic type referring to that type */
     new_type = symbol_typet(id);
@@ -2584,6 +2587,47 @@ bool clang_c_convertert::get_expr(const clang::Stmt &stmt, exprt &new_expr)
   case clang::Stmt::MSAsmStmtClass:
     new_expr = code_skipt();
     break;
+
+  /* According to Clang docs:
+   *
+   * A type trait used in the implementation of various C++11 and Library TR1
+   * trait templates.
+   *   __is_pod(int) == true
+   *   __is_enum(std::string) == false
+   *   __is_trivially_constructible(vector<int>, int*, int*)
+   *
+   * But it is also used for __builtin_types_compatible_p(ty1, ty2). */
+  case clang::Stmt::TypeTraitExprClass:
+  {
+    const clang::TypeTraitExpr &tte =
+      static_cast<const clang::TypeTraitExpr &>(stmt);
+
+    if (tte.isValueDependent())
+    {
+      std::ostringstream oss;
+      llvm::raw_os_ostream ross(oss);
+      ross << "Conversion of unsupported value-dependent type-trait expr: \"";
+      ross << stmt.getStmtClassName() << "\" to expression"
+           << "\n";
+      stmt.dump(ross, *ASTContext);
+      ross.flush();
+      log_error("{}", oss.str());
+      return true;
+    }
+
+    typet type;
+    if (get_type(tte.getType(), type))
+      return true;
+
+    assert(type.id() == typet::t_bool);
+
+    if (tte.getValue())
+      new_expr = true_exprt();
+    else
+      new_expr = false_exprt();
+
+    break;
+  }
 
   default:
   {
