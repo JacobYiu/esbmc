@@ -221,7 +221,7 @@ protected:
    *  - cxxrd: clang AST representing the class/struct we are currently dealing with
    *  - map: this map contains all base class(es) of this class std::map<class_id, pointer to clang AST of base class>
    */
-  void get_base_map(const clang::CXXRecordDecl &cxxrd, base_map &map);
+  bool get_base_map(const clang::CXXRecordDecl &cxxrd, base_map &map);
   /*
    * Check whether we've already got this component in a class type
    * Avoid copying duplicate component from a base class type to the derived class type.
@@ -513,6 +513,13 @@ protected:
    *  md: clang AST representing a C++ method
    */
   bool is_ConstructorOrDestructor(const clang::CXXMethodDecl &md);
+  /*
+   * Check if expr is a temporary object
+   * if not, convert expr to a temporary object
+   * Arguments:
+   *  expr: ESBMC IR to represent Function call
+   */
+  void make_temporary(exprt &expr);
 };
 
 #endif /* CLANG_C_FRONTEND_CLANG_C_CONVERT_H_ */

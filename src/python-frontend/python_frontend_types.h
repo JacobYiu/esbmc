@@ -14,6 +14,7 @@ enum class StatementType
   ASSERT,
   CLASS_DEFINITION,
   PASS,
+  IMPORT,
   UNKNOWN,
 };
 

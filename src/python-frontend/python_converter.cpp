@@ -35,7 +35,9 @@ static const std::unordered_map<std::string, StatementType> statement_map = {
   {"Return", StatementType::RETURN},
   {"Assert", StatementType::ASSERT},
   {"ClassDef", StatementType::CLASS_DEFINITION},
-  {"Pass", StatementType::PASS}};
+  {"Pass", StatementType::PASS},
+  {"ImportFrom", StatementType::IMPORT},
+  {"Import", StatementType::IMPORT}};
 
 static bool is_relational_op(const std::string &op)
 {
@@ -46,6 +48,9 @@ static bool is_relational_op(const std::string &op)
 
 static StatementType get_statement_type(const nlohmann::json &element)
 {
+  if (!element.contains("_type"))
+    return StatementType::UNKNOWN;
+
   auto it = statement_map.find(element["_type"]);
   return (it != statement_map.end()) ? it->second : StatementType::UNKNOWN;
 }
@@ -85,7 +90,7 @@ typet python_converter::get_typet(const std::string &ast_type)
     return long_long_uint_type();
   if (ast_type == "bool")
     return bool_type();
-  if (is_class(ast_type, ast_json["body"]))
+  if (is_class(ast_type, ast_json))
     return symbol_typet("tag-" + ast_type);
   return empty_typet();
 }
@@ -209,10 +214,11 @@ void python_converter::adjust_statement_types(exprt &lhs, exprt &rhs) const
   }
 }
 
-std::string python_converter::create_symbol_id() const
+std::string
+python_converter::create_symbol_id(const std::string &filename) const
 {
   std::stringstream symbol_id;
-  symbol_id << "py:" << python_filename;
+  symbol_id << "py:" << filename;
 
   if (!current_class_name.empty())
     symbol_id << "@C@" << current_class_name;
@@ -221,6 +227,11 @@ std::string python_converter::create_symbol_id() const
     symbol_id << "@F@" << current_func_name;
 
   return symbol_id.str();
+}
+
+std::string python_converter::create_symbol_id() const
+{
+  return create_symbol_id(python_filename);
 }
 
 exprt python_converter::get_binary_operator_expr(const nlohmann::json &element)
@@ -397,6 +408,24 @@ symbolt *python_converter::find_function_in_base_classes(
   return func;
 }
 
+symbolt *python_converter::find_function_in_imported_modules(
+  const std::string &symbol_id) const
+{
+  for (const auto &obj : ast_json["body"])
+  {
+    if (obj["_type"] == "ImportFrom")
+    {
+      std::regex pattern("py:(.*?)@");
+      std::string imported_symbol = std::regex_replace(
+        symbol_id, pattern, "py:" + obj["full_path"].get<std::string>() + "@");
+
+      if (symbolt *func_symbol = context.find_symbol(imported_symbol.c_str()))
+        return func_symbol;
+    }
+  }
+  return nullptr;
+}
+
 std::string python_converter::get_classname_from_symbol_id(
   const std::string &symbol_id) const
 {
@@ -417,11 +446,13 @@ std::string python_converter::get_classname_from_symbol_id(
 
 exprt python_converter::get_function_call(const nlohmann::json &element)
 {
+  // TODO: Refactor into different classes/functions
   if (element.contains("func") && element["_type"] == "Call")
   {
     bool is_member_function_call = false;
-    std::string func_name;
-    std::string obj_name;
+    bool is_imported_module_call = false;
+    std::string func_name, obj_name;
+
     if (element["func"]["_type"] == "Name")
     {
       func_name = element["func"]["id"];
@@ -430,7 +461,10 @@ exprt python_converter::get_function_call(const nlohmann::json &element)
     {
       func_name = element["func"]["attr"];
       obj_name = element["func"]["value"]["id"];
-      is_member_function_call = true;
+      if (json_utils::is_module(obj_name, ast_json))
+        is_imported_module_call = true;
+      else
+        is_member_function_call = true;
     }
 
     // nondet_X() functions restricted to basic types supported in Python
@@ -448,7 +482,11 @@ exprt python_converter::get_function_call(const nlohmann::json &element)
     }
 
     locationt location = get_location_from_decl(element);
-    std::string func_symbol_id = create_symbol_id();
+
+    std::string func_symbol_id =
+      (is_imported_module_call) ? create_symbol_id(imported_modules[obj_name])
+                                : create_symbol_id();
+
     if (func_symbol_id.find("@F@") == func_symbol_id.npos)
       func_symbol_id += std::string("@F@") + func_name;
 
@@ -496,6 +534,11 @@ exprt python_converter::get_function_call(const nlohmann::json &element)
     }
 
     const symbolt *func_symbol = context.find_symbol(func_symbol_id.c_str());
+
+    // Find function in imported modules
+    if (!func_symbol)
+      func_symbol = find_function_in_imported_modules(func_symbol_id);
+
     if (func_symbol == nullptr)
     {
       if (is_ctor_call || is_member_function_call)
@@ -621,7 +664,7 @@ exprt python_converter::get_expr(const nlohmann::json &element)
     else if (element["_type"] == "Attribute")
     {
       var_name = element["value"]["id"].get<std::string>();
-      if (is_class(var_name, ast_json["body"]))
+      if (is_class(var_name, ast_json))
       {
         // Found a class attribute
         var_name = "C@" + var_name;
@@ -1299,6 +1342,9 @@ exprt python_converter::get_block(const nlohmann::json &ast_block)
      *  It can be used when a statement is required syntactically but the program requires no action." */
     case StatementType::PASS:
       break;
+    // Imports are handled by astgen.py so we can just ignore here.
+    case StatementType::IMPORT:
+      break;
     case StatementType::UNKNOWN:
     default:
       log_error(
@@ -1323,9 +1369,16 @@ python_converter::python_converter(
 
 bool python_converter::convert()
 {
-  python_filename = ast_json["filename"].get<std::string>();
+  code_typet main_type;
+  main_type.return_type() = empty_typet();
 
-  exprt block_expr;
+  symbolt main_symbol;
+  main_symbol.id = "__ESBMC_main";
+  main_symbol.name = "__ESBMC_main";
+  main_symbol.type.swap(main_type);
+  main_symbol.lvalue = true;
+  main_symbol.is_extern = false;
+  main_symbol.file_local = false;
 
   // Handle --function option
   const std::string function = config.options.get_option("function");
@@ -1380,30 +1433,47 @@ bool python_converter::convert()
       call.arguments().push_back(arg_value);
     }
 
-    block_expr = call;
+    convert_expression_to_code(call);
+    main_symbol.value.swap(call);
   }
   else
   {
-    // Convert all statements
-    block_expr = get_block(ast_json["body"]);
+    // Convert imported modules
+    for (const auto &elem : ast_json["body"])
+    {
+      if (elem["_type"] == "ImportFrom" || elem["_type"] == "Import")
+      {
+        const std::string &module_name = (elem["_type"] == "ImportFrom")
+                                           ? elem["module"]
+                                           : elem["names"][0]["name"];
+        std::stringstream module_path;
+        module_path << ast_json["ast_output_dir"].get<std::string>() << "/"
+                    << module_name << ".json";
+        std::ifstream imported_file(module_path.str());
+        nlohmann::json imported_module_json;
+        imported_file >> imported_module_json;
+
+        python_filename = imported_module_json["filename"].get<std::string>();
+        imported_modules.emplace(module_name, python_filename);
+
+        exprt imported_code = get_block(imported_module_json["body"]);
+        convert_expression_to_code(imported_code);
+
+        // Add imported code to main symbol
+        main_symbol.value.swap(imported_code);
+      }
+    }
+
+    // Convert main statements
+    python_filename = ast_json["filename"].get<std::string>();
+    exprt main_block = get_block(ast_json["body"]);
+    codet main_code = convert_expression_to_code(main_block);
+
+    if (main_symbol.value.is_code())
+      main_symbol.value.copy_to_operands(main_code);
+    else
+      main_symbol.value.swap(main_code);
   }
-
-  // Get main function code
-  codet main_code = convert_expression_to_code(block_expr);
-
-  // Create and populate "main" symbol
-  symbolt main_symbol;
-
-  code_typet main_type;
-  main_type.return_type() = empty_typet();
-
-  main_symbol.id = "__ESBMC_main";
-  main_symbol.name = "__ESBMC_main";
-  main_symbol.type.swap(main_type);
-  main_symbol.value.swap(main_code);
-  main_symbol.lvalue = true;
-  main_symbol.is_extern = false;
-  main_symbol.file_local = false;
 
   if (context.move(main_symbol))
   {

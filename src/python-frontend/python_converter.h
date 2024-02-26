@@ -37,6 +37,7 @@ private:
   find_var_decl(const std::string &var_name, const nlohmann::json &json);
   void adjust_statement_types(exprt &lhs, exprt &rhs) const;
   std::string create_symbol_id() const;
+  std::string create_symbol_id(const std::string &filename) const;
   bool is_constructor_call(const nlohmann::json &json);
   typet get_typet(const std::string &ast_type);
   typet get_typet(const nlohmann::json &elem);
@@ -49,6 +50,9 @@ private:
     const std::string &symbol_id,
     std::string method_name,
     bool is_ctor) const;
+
+  symbolt *
+  find_function_in_imported_modules(const std::string &symbol_id) const;
 
   void update_instance_from_self(
     const std::string &class_name,
@@ -69,4 +73,6 @@ private:
 
   // Map object to list of instance attributes
   std::unordered_map<std::string, std::set<std::string>> instance_attr_map;
+  // Map imported modules to their corresponding paths
+  std::unordered_map<std::string, std::string> imported_modules;
 };

@@ -740,20 +740,16 @@ public:
     int pos;
     key_type *base;
 
-    iterator(const iterator &i)
+    iterator(const iterator &i) : pos(i.pos), base(i.base)
     {
-      pos = i.pos;
-      base = i.base;
     }
 
-    iterator(key_type *bbase, int ppos)
+    iterator(key_type *bbase, int ppos) : pos(ppos), base(bbase)
     {
       __ESBMC_assert(bbase != NULL, "Invalid null pointer");
-      pos = ppos;
-      base = bbase;
     }
 
-    iterator()
+    iterator() : pos(0), base(NULL)
     {
     }
 
@@ -1071,10 +1067,8 @@ public:
   };
 
   // construct/copy/destroy:
-  explicit set(const Compare &comp = Compare()) : _size(0)
+  explicit set(const Compare &comp = Compare()) : _size(0), rule(comp)
   {
-    _size = 0;
-    this->rule = comp;
   }
 
   explicit set(Key v1[], Key *v2)
@@ -1108,11 +1102,6 @@ public:
     }
     _size = i;
     std::sort(buf, buf + _size /*,rule*/);
-  }
-
-  set() : _size(0)
-  {
-    _size = 0;
   }
 
   set(const set &x)
