@@ -11,7 +11,6 @@
 #include <util/message.h>
 #include <regex>
 #include <iostream>
-
 #include <fstream>
 
 solidity_convertert::solidity_convertert(
@@ -553,12 +552,11 @@ bool solidity_convertert::get_struct_class_method(
 //Used to create a struct from tuple
 //Struct will be populated with variables
 //The variables within the struct will not be initialized
-bool solidity_convertert::get_struct_tuple(
+std::tuple<bool, std::string> solidity_convertert::get_struct_tuple(
   const nlohmann::json &struct_def)
 {
   //This function should only be used for TupleExpressions
   assert(struct_def["nodeType"].get<std::string>() == "TupleExpression");
-  
   // 1. populate name and id
   std::string id, name;
   struct_typet t = struct_typet();
@@ -567,23 +565,42 @@ bool solidity_convertert::get_struct_tuple(
   // But we still need to get unique label
   // e.g. "sol:@C@BASE@tuple#14"
   assert(!current_contractName.empty());
-  std::string label = std::to_string(struct_def["id"].get<int>());
-  name = "tuple#16";
+  //Popping is typically to check if struct is created(RHS)
+  std::string label;
+  if(!struct_def["isLValue"])
+  {
+    if(!tupleQueueIds.empty())
+    {
+      label = tupleQueueIds.front();
+      tupleQueueIds.pop();  
+    }
+    else
+    {
+      log_error("Unable to find struct Ids in tupleQueueIds");
+    }
+  }
+
+  else
+  {
+    label = std::to_string(struct_def["id"].get<int>());
+  }
+
+  name = "tuple#" + label;
   id = "sol:@C@" + current_contractName + "@" + name;
   std::cout << "Printing tuple id " << id << std::endl;
   t.tag(id);  
 
   // 2. Check if the struct symbol is already added to the context, do nothing if it is
   // already in the context.
+  //  If we found it, then we return
   if (context.find_symbol(id) != nullptr)
   {
     std::cout << "Found Struct Symbol " << std::endl;
-    return false;  
+    return {true, id};  
   }
 
   else
   {
-    // context.dump();
     std::cout << "Have not been able to find a struct symbol..Creating " << std::endl;
   }
 
@@ -637,19 +654,20 @@ bool solidity_convertert::get_struct_tuple(
     std::cout << "itr is " << ast_nodes.at(i) << std::endl;
 
     if(get_expr(ast_nodes.at(i), ast_nodes.at(i)["typeDescriptions"], comp))
-      return true;
+      assert(!"This variable has yet to be declared...aborting");
 
     t.components().push_back(comp);
-
     std::cout << "Finished adding a component to the struct" << std::endl;
   }
 
   t.location() = location_begin;
   added_symbol.type = t;
   std::cout << "Dumping struct" << std::endl;
-  t.dump();
+  // Save the label into tupleStack to be used by RHS
 
-  return false;
+  tupleQueueIds.push(label);
+
+  return {false, id};
 }
 
 //Used only for tuples
@@ -1730,12 +1748,12 @@ bool solidity_convertert::get_expr(
     // There will be 2 passes. One for left side, One for right side
     case SolidityGrammar::TypeNameT::TupleTypeName: // case 3
     {
-
       //This function is used to create the struct class
-      //(RHS) If false means that we found an existing struct symbol 
-      //(LHS) If true means that we JUST finished creating the struct symbol
-      // context.dump();
-      if(!get_struct_tuple(expr))
+      //(RHS) If true means that we found an existing struct symbol 
+      //(LHS) If false means that we JUST finished creating the struct symbol
+      //We should get the id that was used for the struct
+      auto [ret, id] = get_struct_tuple(expr);
+      if(!ret)
       {
         //LHS
         std::cout << "Finished Creating a Struct Symbol " << std::endl;
@@ -1746,25 +1764,39 @@ bool solidity_convertert::get_expr(
       //Do we need to deal with mismatch of types? 
       
       //RHS 
-      std::cout << "Populating Struct " << std::endl;
       assert(!current_contractName.empty());
-      
-      std::string label = std::to_string(expr["id"].get<int>());
-      std::string name, id;
-      name = "tuple#" + label;
-      id = "sol:@C@" + current_contractName + "@" + name;
-
       std::cout << "Trying to find struct symbol " << id << std::endl;
       //Get the struct that represents a tuple
-      symbolt tuple_struct = *context.find_symbol(id);
-
-      tuple_struct.dump();
+      symbolt tuple_struct_sym = *context.find_symbol(id);
       
+      typet tuple_struct_type = tuple_struct_sym.type;
+      exprt tuple_struct_exprt = gen_zero(tuple_struct_type);
+      const nlohmann::json components = expr["components"];
 
+      // std::cout << "Populating Struct with exprt containing x_variables: " << tuple_struct_exprt.components << std::endl;
+      for (unsigned int i = 0; i < tuple_struct_exprt.operands().size(); i++)
+      {
+        exprt init;
+        assert(!tuples_LHS_Types.empty());
+        if(get_expr(components.at(i), components.at(i)["typeDescriptions"], init))
+        {
+          std::cout << "Unable to parse components" << std::endl;
+          return true;
+        }
+        
+        const struct_union_typet::componentt *c =
+          &to_struct_type(tuple_struct_type).components().at(i);
+        typet elem_type = c->type();
+
+        solidity_gen_typecast(ns, init, elem_type);
+        tuple_struct_exprt.operands().at(i) = init;  
+      }
       //function to loop through struct components
         //We add in RHS values one by one in order
         //There should not be any mismatch of types or else it will throw compiler error
-      
+      new_expr = tuple_struct_exprt;
+      std::cout << "Dumping new_expr" << std::endl;
+      new_expr.dump();
       break;
     }
 
@@ -3868,7 +3900,6 @@ solidity_convertert::find_decl_ref(int ref_decl_id, std::string &contract_name)
     abort();
   }
 
-  std::cout << "Searching state variables" << std::endl;
   // First, search state variable nodes
   nlohmann::json &nodes = ast_json["nodes"];
   unsigned index = 0;
