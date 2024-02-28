@@ -57,7 +57,6 @@ protected:
   bool get_access_from_decl(
     const nlohmann::json &ast_node,
     struct_typet::componentt &comp);
-  bool get_tuple_identifier(const nlohmann::json &ast_node, struct_typet &type);
   bool get_block(
     const nlohmann::json &expr,
     exprt &
@@ -83,7 +82,6 @@ protected:
   bool get_var_decl_ref(const nlohmann::json &decl, exprt &new_expr);
   bool get_func_decl_ref(const nlohmann::json &decl, exprt &new_expr);
   bool get_enum_member_ref(const nlohmann::json &decl, exprt &new_expr);
-  bool get_element_ref(const nlohmann::json &decl, exprt &new_expr);
   bool get_decl_ref_builtin(const nlohmann::json &decl, exprt &new_expr);
   bool get_type_description(const nlohmann::json &type_name, typet &new_type);
   bool get_func_decl_ref_type(const nlohmann::json &decl, typet &new_type);
@@ -142,7 +140,6 @@ protected:
   nlohmann::json make_return_type_from_typet(typet type);
   nlohmann::json make_pointee_type(const nlohmann::json &sub_expr);
   nlohmann::json make_array_elementary_type(const nlohmann::json &type_descrpt);
-  std::vector<nlohmann::json> make_struct_elementary_types(const nlohmann::json &type_descrpt);
   nlohmann::json make_array_to_pointer_type(const nlohmann::json &type_descrpt);
   std::string get_array_size(const nlohmann::json &type_descrpt);
   bool is_dyn_array(const nlohmann::json &json_in);
