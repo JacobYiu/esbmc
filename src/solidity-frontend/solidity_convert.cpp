@@ -670,79 +670,6 @@ std::tuple<bool, std::string> solidity_convertert::get_struct_tuple(
   return {false, id};
 }
 
-//Used only for tuples
-//Used for declaring OR intializing depending if ExpressionT variableis alraedy created in the struct or not
-//If not created in a struct, then we know we need to declare it in the struct
-//If created in the struct, then we need to intialize it
-bool solidity_convertert::get_tuple_identifier(
-  const nlohmann::json &ast_node,
-  struct_typet &type)
-{
-  //Variable in the struct
-  struct_typet::componentt comp;
-
-  std::cout << "Getting id and placing into comp" << std::endl;
-  // 1. Get the id of the tuple elements to place into comp
-  if(get_element_ref(ast_node, comp))
-  {
-    return true;
-  }
-
-  std::cout << "Push component into struct" << std::endl;
-  // 2. Push the component into our type struct 
-  type.components().push_back(comp);
-  return false;
-}
-
-//Used for tuples to get reference to identifier nodeType
-bool solidity_convertert::get_element_ref(
-  const nlohmann::json &identifier,
-  exprt &new_expr)
-{
-  assert(identifier["nodeType"] == "Identifier");
-
-  std::string function_name, name, id;
-
-  // 1. get contract_name, name and id
-  function_name = current_functionName;
-  
-  name =
-    identifier["name"]
-      .get<
-        std::
-          string>(); // assume Solidity AST json object has "name" field, otherwise throws an exception in nlohmann::json
-
-  // e.g. sol:@C@@F@function_name@x#11
-  // The prefix is used to avoid duplicate names
-  id = "sol:@C@" + current_contractName + "@F@" + function_name + "@" + name + "#" + 
-        i2string(identifier["id"].get<std::int16_t>()); 
-
-  std::cout << "id is " << id << std::endl; 
-
-  // 2. Check if the symbol exists already
-  // If it does not exist, then it should return an error
-  // You cannot declare a variable in a tuple
-  // e.g. (uint age, uint money) = (....);
-  if(context.find_symbol(id) != nullptr)
-  {
-    log_error("Cannot find the declaration of the identifier\n");
-    return true;
-  }
-
-  // context.dump();
-  std::cout << "set new_expr to be equal to the symbol " << std::endl;
-  // context.dump();
-  symbolt identifier_symbol = *context.find_symbol(id);
-  new_expr = symbol_expr(identifier_symbol);
-
-  std::cout << "Dumped Context " << std::endl;
-  //3. Set new_expr to the current symbol to be used outside the function
-  //bug here
-
-  std::cout << "Exiting the get_element_ref" << std::endl;
-  return false;
-}
-
 bool solidity_convertert::get_noncontract_defition(nlohmann::json &ast_node)
 {
   std::string node_type = (ast_node)["nodeType"].get<std::string>();
@@ -1788,7 +1715,6 @@ bool solidity_convertert::get_expr(
       for (unsigned int i = 0; i < tuple_struct_exprt.operands().size(); i++)
       {
         exprt init;
-        assert(!tuples_LHS_Types.empty());
         if(get_expr(components.at(i), components.at(i)["typeDescriptions"], init))
         {
           std::cout << "Unable to parse components" << std::endl;
@@ -2949,6 +2875,7 @@ bool solidity_convertert::get_type_description(
   const nlohmann::json &type_name,
   typet &new_type)
 {
+  std::cout << "Getting Type Name " << type_name << std::endl;
   // For Solidity rule type-name:
   SolidityGrammar::TypeNameT type = SolidityGrammar::get_type_name_t(type_name);
 
@@ -4353,77 +4280,6 @@ std::vector<std::string> splitByDelimiter(const std::string &str, const std::str
   }
 
   return output;
-}
-
-std::vector<nlohmann::json> solidity_convertert::make_struct_elementary_types(
-  const nlohmann::json &type_descrpt)
-{
-  // Function used to extract the elementary types inside a tuple
-  // A tuple has many different variables which may contain different types
-  
-  // type_descrpt is of the form: 
-  // {"typeIdentifier":"t_tuple$_...","typeString":"tuple(...)"}
-  
-  // Our objective is to convert the typeIdentifier and typeStrings
-  // into multiple sub type_descrpts
-
-  /*
-    e.g.
-    {
-      "typeIdentifier":"t_tuple$_t_uint256_$_t_bool_$_t_string_memory_ptr_$",
-      "typeString":"tuple(uint256,bool,string memory)"
-    }
-
-     convert to
-
-    [
-     "typeDescriptions": {
-        "typeIdentifier": "t_uint256",
-       "typeString": "uint256"
-      }, 
-
-     "typeDescriptions": {
-        "typeIdentifier": "t_bool",
-       "typeString": "bool"
-      }, 
-
-     "typeDescriptions": {
-        "typeIdentifier": "t_string_memory_ptr",
-       "typeString": "string memory"
-      }      
-    ]
-  */
-
-  // We first need to preprocess type description here
-
-  std::vector<nlohmann::json> arr_elementary_types;
-  std::string typeIdentifier = type_descrpt["typeIdentifier"];
-  std::string typeString = type_descrpt["typeString"];
-
-  std::string dataStructure = typeIdentifier.substr(0,8);
-  assert(dataStructure == "t_tuple$");
-
-  // typeId has the form of
-  // t_uint256_$_t_bool_$_t_string_memory_ptr
-  std::string typeId = typeIdentifier.substr(9, (typeIdentifier.length()-11));
-
-  // typeStr has the form of 
-  // uint256,bool,string memory
-  std::string typeStr = typeString.substr(6, (typeString.length() - 7));
-
-  //Separate accordingly
-  std::vector<std::string> typeIdArr = splitByDelimiter(typeId, "_$_");
-  std::vector<std::string> typeStrArr = splitByDelimiter(typeStr, ",");
-
-  //Loop through both typeIdArr and typeStrArr to create array
-  nlohmann::json elementary_type;
-  for(unsigned int i = 0; i < typeIdArr.size(); i++)
-  {
-    elementary_type = {{"typeIdentifier", typeIdArr[i]}, {"typeString", typeStrArr[i]}};
-    arr_elementary_types.push_back(elementary_type);
-  }
-
-  return arr_elementary_types;
 }
 
 nlohmann::json solidity_convertert::make_array_to_pointer_type(
