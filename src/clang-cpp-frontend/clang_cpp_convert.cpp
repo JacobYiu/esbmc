@@ -204,7 +204,7 @@ bool clang_cpp_convertert::get_type(
       static_cast<const clang::RValueReferenceType &>(the_type);
 
     typet sub_type;
-    if (get_type(rvrt.getPointeeTypeAsWritten(), sub_type))
+    if (get_type(rvrt.getPointeeType(), sub_type))
       return true;
 
     // This is done similarly to lvalue reference.
@@ -214,7 +214,7 @@ bool clang_cpp_convertert::get_type(
       sub_type = symbol_typet(tag_prefix + t.tag().as_string());
     }
 
-    if (rvrt.getPointeeTypeAsWritten().isConstQualified())
+    if (rvrt.getPointeeType().isConstQualified())
       sub_type.cmt_constant(true);
 
     new_type = gen_pointer_type(sub_type);
@@ -544,7 +544,8 @@ bool clang_cpp_convertert::get_expr(const clang::Stmt &stmt, exprt &new_expr)
       return true;
 
     typet type;
-    if (get_type(operator_call.getType(), type))
+    clang::QualType qtype = operator_call.getCallReturnType(*ASTContext);
+    if (get_type(qtype, type))
       return true;
 
     side_effect_expr_function_callt call;
@@ -609,10 +610,17 @@ bool clang_cpp_convertert::get_expr(const clang::Stmt &stmt, exprt &new_expr)
     if (get_expr(*mtemp.getSubExpr(), tmp))
       return true;
 
+    side_effect_exprt temporary("temporary_object");
+    temporary.type() = tmp.type();
+    temporary.copy_to_operands(tmp);
+
+    address_of_exprt addr(temporary);
     if (mtemp.isBoundToLvalueReference())
-      new_expr = address_of_exprt(tmp);
+      addr.type().set("#reference", true);
     else
-      new_expr.swap(tmp);
+      addr.type().set("#rvalue_reference", true);
+
+    new_expr.swap(addr);
 
     break;
   }
@@ -721,7 +729,7 @@ bool clang_cpp_convertert::get_expr(const clang::Stmt &stmt, exprt &new_expr)
       reinterpret_cast<std::size_t>(current_functionDecl->getFirstDecl());
 
     this_mapt::iterator it = this_map.find(address);
-    if (this_map.find(address) == this_map.end())
+    if (it == this_map.end())
     {
       log_error(
         "Pointer `this' for method {} was not added to scope",
@@ -748,13 +756,13 @@ bool clang_cpp_convertert::get_expr(const clang::Stmt &stmt, exprt &new_expr)
     if (get_constructor_call(cxxtoe, new_expr))
       return true;
 
-    make_temporary(new_expr);
-
     break;
   }
 
   default:
-    return clang_c_convertert::get_expr(stmt, new_expr);
+    if (clang_c_convertert::get_expr(stmt, new_expr))
+      return true;
+    break;
   }
 
   new_expr.location() = location;
@@ -779,30 +787,30 @@ bool clang_cpp_convertert::get_constructor_call(
   call.function() = callee_decl;
   call.type() = type;
 
+  /* TODO: Investigate when it's possible to avoid the temporary object:
+
   // Try to get the object that this constructor is constructing
   auto parents = ASTContext->getParents(constructor_call);
   auto it = parents.begin();
   const clang::Decl *objectDecl = it->get<clang::Decl>();
-
   if (!objectDecl && need_new_object(it->get<clang::Stmt>(), constructor_call))
-  {
-    address_of_exprt tmp_expr;
-    tmp_expr.type() = pointer_typet();
-    tmp_expr.type().subtype() = type;
+    [...]
 
-    exprt new_object("new_object");
-    new_object.set("#lvalue", true);
-    new_object.type() = type;
-
-    tmp_expr.operands().resize(0);
-    tmp_expr.move_to_operands(new_object);
-
-    call.arguments().push_back(tmp_expr);
-  }
+   */
 
   // Calling base constructor from derived constructor
   if (new_expr.base_ctor_derived())
     gen_typecast_base_ctor_call(callee_decl, call, new_expr);
+  else
+  {
+    exprt this_object = exprt("new_object");
+    this_object.set("#lvalue", true);
+    this_object.type() = type;
+
+    /* first parameter is address to the object to be constructed */
+    address_of_exprt tmp_expr(this_object);
+    call.arguments().push_back(tmp_expr);
+  }
 
   // Do args
   for (const clang::Expr *arg : constructor_call.arguments())
@@ -816,8 +824,9 @@ bool clang_cpp_convertert::get_constructor_call(
 
   call.set("constructor", 1);
 
-  // We don't build a temporary obejct around it.
-  // We follow the old cpp frontend to just add the ctor function call.
+  if (!new_expr.base_ctor_derived())
+    make_temporary(call);
+
   new_expr.swap(call);
 
   return false;
@@ -902,7 +911,8 @@ bool clang_cpp_convertert::get_function_body(
             abort();
           }
 
-          build_member_from_component(fd, lhs);
+          build_member_from_component(
+            fd, lhs.id() == "dereference" ? lhs.op0() : lhs);
 
           exprt rhs;
           if (get_expr(*init->getInit(), rhs))
@@ -1147,7 +1157,14 @@ bool clang_cpp_convertert::get_decl_ref(
     if (id.empty() && name.empty())
       name_param_and_continue(*param, id, name, new_expr);
 
-    return false;
+    if (is_reference(new_expr.type()) || is_rvalue_reference(new_expr.type()))
+    {
+      new_expr = dereference_exprt(new_expr, new_expr.type());
+      new_expr.set("#lvalue", true);
+      new_expr.set("#implicit", true);
+    }
+
+    break;
   }
   case clang::Decl::CXXConstructor:
   {
@@ -1168,19 +1185,29 @@ bool clang_cpp_convertert::get_decl_ref(
     assert(md);
     annotate_ctor_dtor_rtn_type(*md, fd_type.return_type());
 
+    new_expr = exprt("symbol", type);
+    new_expr.identifier(id);
+    new_expr.cmt_lvalue(true);
+    new_expr.name(name);
+
     break;
   }
 
   default:
   {
-    return clang_c_convertert::get_decl_ref(decl, new_expr);
-  }
-  }
+    if (clang_c_convertert::get_decl_ref(decl, new_expr))
+      return true;
 
-  new_expr = exprt("symbol", type);
-  new_expr.identifier(id);
-  new_expr.cmt_lvalue(true);
-  new_expr.name(name);
+    if (is_reference(new_expr.type()) || is_rvalue_reference(new_expr.type()))
+    {
+      new_expr = dereference_exprt(new_expr, new_expr.type());
+      new_expr.set("#lvalue", true);
+      new_expr.set("#implicit", true);
+    }
+
+    break;
+  }
+  }
 
   return false;
 }
