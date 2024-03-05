@@ -33,7 +33,8 @@ public:
 
   /// Bound value
   std::optional<T> lower, upper;
-
+  /// Type to be used for shift operations
+  type2tc type;
   T get_lower() const
   {
     return get(false);
@@ -508,8 +509,6 @@ public:
   static interval_templatet<T> bitnot(const interval_templatet<T> &w)
   {
     interval_templatet<T> result;
-    result.set_lower(-w.get_upper() - 1);
-    result.set_upper(-w.get_lower() - 1);
     return result;
   }
 

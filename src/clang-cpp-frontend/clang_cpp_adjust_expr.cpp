@@ -48,13 +48,10 @@ void clang_cpp_adjust::adjust_side_effect(side_effect_exprt &expr)
   }
   else if (statement == "temporary_object")
   {
-    exprt &initializer = static_cast<exprt &>(expr.add("initializer"));
+    adjust_operands(expr);
+
+    exprt &initializer = (exprt &)expr.find("initializer");
     adjust_expr(initializer);
-
-    side_effect_expr_function_callt &constructor_call =
-      to_side_effect_expr_function_call(initializer.op0());
-
-    adjust_function_call_arguments(constructor_call);
   }
   else if (statement == "assign")
   {
@@ -124,7 +121,7 @@ void clang_cpp_adjust::adjust_cpp_member(member_exprt &expr)
    *      * type: ...
    *      * id: <setX_clang_ID>
    */
-  const symbolt *comp_symb = namespacet(context).lookup(expr.component_name());
+  const symbolt *comp_symb = ns.lookup(expr.component_name());
   assert(comp_symb);
   // compoment's type shall be the same as member_exprt's type
   // and both are of the type `code`
@@ -270,30 +267,6 @@ void clang_cpp_adjust::adjust_function_call_arguments(
   side_effect_expr_function_callt &expr)
 {
   clang_c_adjust::adjust_function_call_arguments(expr);
-
-  exprt::operandst &arguments = expr.arguments();
-
-  for (unsigned i = 0; i < arguments.size(); i++)
-  {
-    exprt &op = arguments[i];
-    if (op.is_typecast() && op.type().get_bool("#reference"))
-    {
-      // special treatment for lvalue reference in function parameter list
-      // e.g. for F(a), where F is a function taking an int lvalue reference.
-      // Since we've modelled lvalue references as pointers, clang_c_aduster
-      // would have adjusted the parameter to a typecasting expression:
-      //  F((int &)a);
-      // but what we really want is an address_of expression:
-      //  F(*a);
-      address_of_exprt tmp_expr;
-      assert(op.type().is_pointer());
-      tmp_expr.type() = op.type();
-      tmp_expr.operands().resize(0);
-      tmp_expr.move_to_operands(op.op0());
-      tmp_expr.location() = op.location();
-      op.swap(tmp_expr);
-    }
-  }
 }
 
 void clang_cpp_adjust::align_se_function_call_return_type(
