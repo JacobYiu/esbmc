@@ -278,6 +278,7 @@ bool solidity_convertert::get_var_decl(
   const nlohmann::json &ast_node,
   exprt &new_expr)
 {
+  std::cout << "ast_node is " << ast_node << std::endl;
   // For Solidity rule state-variable-declaration:
   // 1. populate typet
   typet t;
@@ -365,7 +366,7 @@ bool solidity_convertert::get_var_decl(
   // 6. add symbol into the context
   // just like clang-c-frontend, we have to add the symbol before converting the initial assignment
   symbolt &added_symbol = *move_symbol_to_context(symbol);
-
+  
   // 7. populate init value if there is any
   code_declt decl(symbol_expr(added_symbol));
 
@@ -388,7 +389,7 @@ bool solidity_convertert::get_var_decl(
 
   decl.location() = location_begin;
   new_expr = decl;
-
+  context.dump();
   return false;
 }
 
@@ -587,7 +588,6 @@ std::tuple<bool, std::string> solidity_convertert::get_struct_tuple(
 
   name = "tuple#" + label;
   id = "sol:@C@" + current_contractName + "@" + name;
-  std::cout << "Printing tuple id " << id << std::endl;
   t.tag(id);  
 
   // 2. Check if the struct symbol is already added to the context, do nothing if it is
@@ -595,7 +595,7 @@ std::tuple<bool, std::string> solidity_convertert::get_struct_tuple(
   //  If we found it, then we return
   if (context.find_symbol(id) != nullptr)
   {
-    std::cout << "Found Struct Symbol " << std::endl;
+    // std::cout << "Found Struct Symbol " << std::endl;
     return {true, id};  
   }
 
@@ -624,7 +624,6 @@ std::tuple<bool, std::string> solidity_convertert::get_struct_tuple(
   assert(struct_def.contains("components"));
   nlohmann::json ast_nodes = struct_def["components"];
 
-  std::cout << "Populating identifiers" << std::endl;
   // 6. Populate the Identifiers 
 
   // std::string contract_name;
@@ -651,18 +650,14 @@ std::tuple<bool, std::string> solidity_convertert::get_struct_tuple(
            type == SolidityGrammar::ExpressionT::StructMemberCall ||
            type == SolidityGrammar::ExpressionT::IndexAccess);
 
-    std::cout << "itr is " << ast_nodes.at(i) << std::endl;
-
     if(get_expr(ast_nodes.at(i), ast_nodes.at(i)["typeDescriptions"], comp))
       assert(!"This variable has yet to be declared...aborting");
 
     t.components().push_back(comp);
-    std::cout << "Finished adding a component to the struct" << std::endl;
   }
 
   t.location() = location_begin;
   added_symbol.type = t;
-  std::cout << "Dumping struct" << std::endl;
   // Save the label into tupleStack to be used by RHS
 
   tupleQueueIds.push(label);
@@ -1417,9 +1412,10 @@ bool solidity_convertert::get_expr(
   {
   case SolidityGrammar::ExpressionT::BinaryOperatorClass:
   {
+    std::cout << "BinaryOperatorClass" << expr.dump(4) << "\n" << std::endl;
+    // context.dump();
     if (get_binary_operator_expr(expr, new_expr))
       return true;
-
     break;
   }
   case SolidityGrammar::ExpressionT::UnaryOperatorClass:
@@ -1437,6 +1433,7 @@ bool solidity_convertert::get_expr(
   }
   case SolidityGrammar::ExpressionT::DeclRefExprClass:
   {
+    // std::cout << "DeclRefExprClass: " << expr.dump(4) << "\n" << std::endl;
     if (expr["referencedDeclaration"] > 0)
     {
       // for Contract Type Identifier Only
@@ -1693,9 +1690,9 @@ bool solidity_convertert::get_expr(
       auto [ret, id] = get_struct_tuple(expr);
       if(!ret)
       {
+        // log_status("Dumping context");
+        // context.dump();
         //LHS
-        std::cout << "Finished Creating a Struct Symbol " << std::endl;
-        std::cout << "----------------------------------\n" << std::endl;
         return false;
       }
 
@@ -1703,7 +1700,6 @@ bool solidity_convertert::get_expr(
       
       //RHS 
       assert(!current_contractName.empty());
-      std::cout << "Trying to find struct symbol " << id << std::endl;
       //Get the struct that represents a tuple
       symbolt tuple_struct_sym = *context.find_symbol(id);
       
@@ -1715,9 +1711,10 @@ bool solidity_convertert::get_expr(
       for (unsigned int i = 0; i < tuple_struct_exprt.operands().size(); i++)
       {
         exprt init;
+
         if(get_expr(components.at(i), components.at(i)["typeDescriptions"], init))
         {
-          std::cout << "Unable to parse components" << std::endl;
+          // std::cout << "Unable to parse components" << std::endl;
           return true;
         }
         
@@ -1750,6 +1747,7 @@ bool solidity_convertert::get_expr(
   }
   case SolidityGrammar::ExpressionT::CallExprClass:
   {
+    // std::cout << "CallExprClass " << expr.dump(4) << "\n" << std::endl;
     // 1. Get callee expr
     const nlohmann::json &callee_expr_json = expr["expression"];
 
@@ -1922,6 +1920,7 @@ bool solidity_convertert::get_expr(
   }
   case SolidityGrammar::ExpressionT::ImplicitCastExprClass:
   {
+    // std::cout << "ImplicitCastExprClass" << expr << std::endl;
     if (get_cast_expr(expr, new_expr, literal_type))
       return true;
     break;
@@ -2232,6 +2231,14 @@ bool solidity_convertert::get_binary_operator_expr(
   const nlohmann::json &expr,
   exprt &new_expr)
 {
+  // std::string age = "sol:@C@@F@test_tuple@age_me#5";
+  // if(context.find_symbol(age) != nullptr)
+  // {
+  //   const symbolt age_sym = *context.find_symbol(age);
+  //   log_status("Dumping age symbol");
+  //   age_sym.dump();
+  // }
+  std::cout << "expr for get_binary_operator_expr is " << expr.dump(4) << std::endl;
   // preliminary step for recursive BinaryOperation
   current_BinOp_type.push(&(expr["typeDescriptions"]));
 
@@ -2266,6 +2273,18 @@ bool solidity_convertert::get_binary_operator_expr(
   typet t;
   assert(current_BinOp_type.size());
   const nlohmann::json &binop_type = *(current_BinOp_type.top());
+  
+  // Subject to change
+  // Could change get_type_description, but that may affect existing codes elsewhere
+  // A suggestion is to add TupleTypeName as a type for it though if we are going to change something
+  if(binop_type["typeIdentifier"] == "t_tuple$__$")
+  {
+    new_expr = rhs;
+    // std::cout << "expr after copying is " << new_expr << std::endl;
+    current_BinOp_type.pop();
+    return false;
+  }
+
   if (get_type_description(binop_type, t))
     return true;
 
@@ -2282,6 +2301,8 @@ bool solidity_convertert::get_binary_operator_expr(
   case SolidityGrammar::ExpressionT::BO_Assign:
   {
     new_expr = side_effect_exprt("assign", t);
+    log_status("Dumping new_expr for assign");
+    new_expr.dump();
     break;
   }
   case SolidityGrammar::ExpressionT::BO_Add:
@@ -2374,6 +2395,8 @@ bool solidity_convertert::get_binary_operator_expr(
   case SolidityGrammar::ExpressionT::BO_EQ:
   {
     new_expr = exprt("=", t);
+    log_status("Dumping new_expr for ==");
+    new_expr.dump();
     break;
   }
   case SolidityGrammar::ExpressionT::BO_LAnd:
@@ -2476,7 +2499,8 @@ bool solidity_convertert::get_binary_operator_expr(
 
   // 4. Copy to operands
   new_expr.copy_to_operands(lhs, rhs);
-
+  log_status("Finished copying operands");
+  new_expr.dump();
   // Pop current_BinOp_type.push as we've finished this conversion
   current_BinOp_type.pop();
 
@@ -2875,11 +2899,10 @@ bool solidity_convertert::get_type_description(
   const nlohmann::json &type_name,
   typet &new_type)
 {
-  std::cout << "Getting Type Name " << type_name << std::endl;
-  // For Solidity rule type-name:
+  // std::cout << "Getting Type Name " << type_name << std::endl;
+  // For Solidity rule type-name:DeclRefExprClass
   SolidityGrammar::TypeNameT type = SolidityGrammar::get_type_name_t(type_name);
 
-  // std::cout << "rule type name " << type << std::endl;
   switch (type)
   {
   case SolidityGrammar::TypeNameT::ElementaryTypeName:
@@ -3149,7 +3172,6 @@ bool solidity_convertert::get_type_description(
   }
   default:
   {
-    // std::cout << "testing struct type name " << std::endl;
     log_debug(
       "solidity",
       "	@@@ got type name=SolidityGrammar::TypeNameT::{}",
@@ -3617,7 +3639,6 @@ void solidity_convertert::get_var_decl_name(
     assert(!current_functionName.empty());
     id = "sol:@C@" + contract_name + "@F@" + current_functionName + "@" + name +
          "#" + i2string(ast_node["id"].get<std::int16_t>());
-    log_status("Id is ", id);
   }
   else if (ast_node.contains("scope"))
   {
