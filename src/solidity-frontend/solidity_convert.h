@@ -43,6 +43,8 @@ protected:
   bool get_noncontract_defition(nlohmann::json &ast_node);
   bool get_struct_class(const nlohmann::json &ast_node);
   std::tuple<bool, std::string> get_struct_tuple(const nlohmann::json &ast_node);
+  std::tuple<bool, std::string> populate_tuple_array(const nlohmann::json &ast_node);
+  void check_tuple_components(std::queue<nlohmann::json> queue);
   void add_enum_member_val(nlohmann::json &ast_node);
   bool get_error_definition(const nlohmann::json &ast_node);
 
@@ -204,6 +206,12 @@ protected:
   //  RHS would access tupleStack by getting the next occurence to get id number of tuple_struct
   //  Queue is important for nested tuples because it needs to access the outer tuple element first
   std::queue<std::string> tupleQueueIds;
+
+  // Used specifically for tuples
+  // Used to save nlohmann::json of the LHS components of tuples
+  // e.g (x,y)
+  // jsonTupleComponents.pop() = exprt of x
+  std::queue<nlohmann::json> jsonTupleComponents;
 
   // Auxiliary data structures:
   // Mapping from the Contract_id to the Contract_Name

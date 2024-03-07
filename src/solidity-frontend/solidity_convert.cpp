@@ -278,7 +278,6 @@ bool solidity_convertert::get_var_decl(
   const nlohmann::json &ast_node,
   exprt &new_expr)
 {
-  std::cout << "ast_node is " << ast_node << std::endl;
   // For Solidity rule state-variable-declaration:
   // 1. populate typet
   typet t;
@@ -389,7 +388,7 @@ bool solidity_convertert::get_var_decl(
 
   decl.location() = location_begin;
   new_expr = decl;
-  context.dump();
+  // context.dump();
   return false;
 }
 
@@ -626,14 +625,7 @@ std::tuple<bool, std::string> solidity_convertert::get_struct_tuple(
 
   // 6. Populate the Identifiers 
 
-  // std::string contract_name;
-  // if(get_current_contract_name(struct_def, contract_name))
-  // {
-  //   return true;
-  // }
-
   for (unsigned int i = 0; i < ast_nodes.size(); i++)
-  
   {
     //nodeType of the components
     struct_typet::componentt comp;
@@ -663,6 +655,120 @@ std::tuple<bool, std::string> solidity_convertert::get_struct_tuple(
   tupleQueueIds.push(label);
 
   return {false, id};
+}
+
+std::tuple<bool, std::string> solidity_convertert::populate_tuple_array(
+  const nlohmann::json &struct_def)
+{
+  //This function should only be used for TupleExpressions
+  assert(struct_def["nodeType"].get<std::string>() == "TupleExpression");
+  // 1. populate name and id
+  std::string id, name;
+  struct_typet t = struct_typet();
+
+  // Conversion of tuple to struct so tuple has no default name
+  // But we still need to get unique label
+  // e.g. "sol:@C@BASE@tuple#14"
+  assert(!current_contractName.empty());
+  //Popping is typically to check if struct is created(RHS)
+  std::string label;
+  if(!struct_def["isLValue"])
+  {
+    if(!tupleQueueIds.empty())
+    {
+      label = tupleQueueIds.front();
+      tupleQueueIds.pop();  
+    }
+    else
+    {
+      log_error("Unable to find struct Ids in tupleQueueIds");
+    }
+  }
+
+  else
+  {
+    label = std::to_string(struct_def["id"].get<int>());
+  }
+
+  name = "tuple#" + label;
+  id = "sol:@C@" + current_contractName + "@" + name;
+  t.tag(id);  
+
+  // 2. Check if the struct symbol is already added to the context, do nothing if it is
+  // already in the context.
+  //  If we found it, then we return
+  if (context.find_symbol(id) != nullptr)
+  {
+    // std::cout << "Found Struct Symbol " << std::endl;
+    return {true, id};
+  }
+
+  else
+  {
+    std::cout << "Have not been able to find a struct symbol..Creating " << std::endl;
+  }
+
+  // 3. populate location
+  locationt location_begin;
+  get_location_from_decl(struct_def, location_begin);
+
+  // 4. populate debug module name
+  std::string debug_modulename =
+    get_modulename_from_path(location_begin.file().as_string());
+  current_fileName = debug_modulename;
+
+  // 5. set symbol attributes for the struct
+  symbolt symbol;
+  get_default_symbol(symbol, debug_modulename, t, name, id, location_begin);
+
+  symbol.is_type = true;
+  symbolt &added_symbol = *move_symbol_to_context(symbol);
+
+  //Components consist of our variables used in our tuple
+  assert(struct_def.contains("components"));
+  nlohmann::json ast_nodes = struct_def["components"];
+
+  for(unsigned int i = 0; i < ast_nodes.size(); i++)
+  {
+    struct_typet::componentt comp;
+    SolidityGrammar::ExpressionT type = 
+      SolidityGrammar::get_expression_t(ast_nodes.at(i));
+    
+    // You can use tuple assignments with: 
+    //    - Primitive Types (Identifier): Such as uint, bool, address, bytes, string, etc.
+    //    - Arrays          (IndexAccess)
+    //    - Mappings        (IndexAccess)
+    //    - Struct Instances(MemberAccess)
+
+    assert(type == SolidityGrammar::ExpressionT::DeclRefExprClass ||
+           type == SolidityGrammar::ExpressionT::StructMemberCall ||
+           type == SolidityGrammar::ExpressionT::IndexAccess);
+
+    if(get_expr(ast_nodes.at(i), ast_nodes.at(i)["typeDescriptions"], comp))
+      assert(!"This variable has yet to be declared...aborting"); 
+
+    t.components().push_back(comp);
+    jsonTupleComponents.push(ast_nodes.at(i));
+  }
+
+  check_tuple_components(jsonTupleComponents);
+  tupleQueueIds.push(label);
+
+  added_symbol.type = t;
+
+  return {false, id};
+}
+
+void solidity_convertert::check_tuple_components(std::queue<nlohmann::json> queue)
+{
+  std::queue<nlohmann::json> temp = queue;
+  while(!temp.empty())
+  {
+    std::cout << "Printing out tuple components from queue" << std::endl;
+    nlohmann::json poppedValue = temp.front();
+    std::cout << poppedValue.dump(4) << std::endl;
+    temp.pop();
+  }
 }
 
 bool solidity_convertert::get_noncontract_defition(nlohmann::json &ast_node)
@@ -1035,19 +1141,65 @@ bool solidity_convertert::get_block(
   case SolidityGrammar::BlockT::Statement:
   {
     const nlohmann::json &stmts = block["statements"];
+    // std::cout << "Dumping statements in statement block " << stmts.dump(4) << std::endl;
 
     code_blockt _block;
     unsigned ctr = 0;
     // items() returns a key-value pair with key being the index
     for (auto const &stmt_kv : stmts.items())
     {
+      nlohmann::json cur_stmt = stmt_kv.value();
       exprt statement;
-      if (get_statement(stmt_kv.value(), statement))
+      if (get_statement(cur_stmt, statement))
         return true;
+      
+      bool is_tuple = false;
 
-      convert_expression_to_code(statement);
-      _block.operands().push_back(statement);
-      ++ctr;
+      // std::cout << "stmt_kv is " << cur_stmt.dump(4) << std::endl;
+      SolidityGrammar::StatementT stmt_type = SolidityGrammar::get_statement_t(cur_stmt);
+      if(stmt_type == SolidityGrammar::StatementT::ExpressionStatement)
+      {
+        SolidityGrammar::ExpressionT exprType = SolidityGrammar::get_expression_t(cur_stmt["expression"]);
+        if(exprType == SolidityGrammar::ExpressionT::BinaryOperatorClass)
+        {
+          if(cur_stmt["expression"].contains("leftHandSide"))
+          {
+            nlohmann::json tuple_desc = cur_stmt["expression"]["leftHandSide"]["typeDescriptions"];
+            if (tuple_desc.contains("typeString"))
+            {
+              const std::string typeString = tuple_desc["typeString"].get<std::string>();
+              if(typeString.substr(0,6) == "tuple(")
+              {
+                if(!tuple_desc.contains("tuple()"))
+                {
+                  is_tuple = true;
+                  log_status("is_tuple is turned on");
+                }
+              }
+            }
+          }
+        }
+      }
+
+      log_status("statement after stmt_kv is ");
+      statement.dump();
+      
+      if(is_tuple)
+      {
+        std::vector<exprt> tuple_operand = statement.operands();
+        for(exprt &exprt_op : tuple_operand)
+        {
+          convert_expression_to_code(exprt_op);
+          _block.operands().push_back(exprt_op);
+          ++ctr;
+        }
+      }
+      else
+      {
+        convert_expression_to_code(statement);
+        _block.operands().push_back(statement);
+        ++ctr;
+      }
     }
     log_debug("solidity", " \t@@@ CompoundStmt has {} statements", ctr);
 
@@ -1412,7 +1564,7 @@ bool solidity_convertert::get_expr(
   {
   case SolidityGrammar::ExpressionT::BinaryOperatorClass:
   {
-    std::cout << "BinaryOperatorClass" << expr.dump(4) << "\n" << std::endl;
+    // std::cout << "BinaryOperatorClass" << expr.dump(4) << "\n" << std::endl;
     // context.dump();
     if (get_binary_operator_expr(expr, new_expr))
       return true;
@@ -1679,7 +1831,18 @@ bool solidity_convertert::get_expr(
     }
 
     // case 3
-    // Function we need to implement
+    //We will use a code block as the new_expr this
+      /*
+      {
+        (a,b) = (1,2)
+        ==>
+        if(true)
+        {
+          a=1;
+          b=2;
+        }
+      }
+      */
     // There will be 2 passes. One for left side, One for right side
     case SolidityGrammar::TypeNameT::TupleTypeName: // case 3
     {
@@ -1687,50 +1850,94 @@ bool solidity_convertert::get_expr(
       //(RHS) If true means that we found an existing struct symbol 
       //(LHS) If false means that we JUST finished creating the struct symbol
       //We should get the id that was used for the struct
-      auto [ret, id] = get_struct_tuple(expr);
+      auto [ret, id] = populate_tuple_array(expr);
       if(!ret)
       {
-        // log_status("Dumping context");
-        // context.dump();
         //LHS
         return false;
       }
 
-      //Do we need to deal with mismatch of types? 
-      
-      //RHS 
+      std::cout << "Parsing RHS now" << std::endl;
+
+      //RHS
       assert(!current_contractName.empty());
       //Get the struct that represents a tuple
+      //We dont really care about the components, all we care about is the number of components
       symbolt tuple_struct_sym = *context.find_symbol(id);
-      
-      typet tuple_struct_type = tuple_struct_sym.type;
+      typet tuple_struct_type = tuple_struct_sym.type;  
       exprt tuple_struct_exprt = gen_zero(tuple_struct_type);
+
       const nlohmann::json components = expr["components"];
 
-      // std::cout << "Populating Struct with exprt containing x_variables: " << tuple_struct_exprt.components << std::endl;
+      locationt location;
+      get_start_location_from_stmt(expr, location);
+
+            // guard: nondet_bool()
+      if (context.find_symbol("c:@F@nondet_bool") == nullptr)
+      {
+        log_status("Unable to find guard expression");
+        return true;
+      }
+
+      code_blockt _block;
+      // codet while_body;
+      // while_body.make_block();
+
       for (unsigned int i = 0; i < tuple_struct_exprt.operands().size(); i++)
       {
-        exprt init;
+        std::cout << "Parsing Components in a tuple expression " << std::endl;
 
-        if(get_expr(components.at(i), components.at(i)["typeDescriptions"], init))
-        {
-          // std::cout << "Unable to parse components" << std::endl;
+        exprt rhs;
+        exprt lhs;
+        nlohmann::json lhsJson;
+
+        //statement is combination of lhs = rhs
+        // e.g. (x,y) = (1,2)
+        // For this iteration, x = 1
+        // For next iteration, y = 2
+        exprt assignment;
+
+        if(get_expr(components.at(i), components.at(i)["typeDescriptions"], rhs))
           return true;
-        }
-        
-        const struct_union_typet::componentt *c =
-          &to_struct_type(tuple_struct_type).components().at(i);
-        typet elem_type = c->type();
 
-        solidity_gen_typecast(ns, init, elem_type);
-        tuple_struct_exprt.operands().at(i) = init;  
+        if(!jsonTupleComponents.empty())
+        {
+          lhsJson = jsonTupleComponents.front();
+          jsonTupleComponents.pop();
+          if(get_expr(lhsJson, lhsJson["typeDescriptions"], lhs))
+          {
+            return true;
+          }
+        }
+
+        typet t;
+        if(get_type_description(lhsJson["typeDescriptions"], t))
+          return true;
+
+        assignment = side_effect_exprt("assign", t);
+        assignment.copy_to_operands(lhs, rhs);
+
+        _block.move_to_operands(assignment);
+
       }
-      //function to loop through struct components
-        //We add in RHS values one by one in order
-        //There should not be any mismatch of types or else it will throw compiler error
-      new_expr = tuple_struct_exprt;
-      std::cout << "Dumping new_expr" << std::endl;
-      new_expr.dump();
+
+      // const symbolt &guard = *context.find_symbol("c:@F@nondet_bool");
+      // side_effect_expr_function_callt cond_expr;
+      // cond_expr.name("nondet_bool");
+      // cond_expr.identifier("c:@F@nondet_bool");
+      // cond_expr.location() = guard.location;
+      // cond_expr.cmt_lvalue(true);
+      // cond_expr.function() = symbol_expr(guard);
+
+      // code_whilet code_while;
+      // code_while.cond() = cond_expr;
+      // code_while.body() = while_body;
+
+      locationt location_end;
+      get_final_location_from_stmt(expr, location_end);
+      _block.end_location(location_end);
+
+      new_expr = _block;
       break;
     }
 
@@ -2231,14 +2438,7 @@ bool solidity_convertert::get_binary_operator_expr(
   const nlohmann::json &expr,
   exprt &new_expr)
 {
-  // std::string age = "sol:@C@@F@test_tuple@age_me#5";
-  // if(context.find_symbol(age) != nullptr)
-  // {
-  //   const symbolt age_sym = *context.find_symbol(age);
-  //   log_status("Dumping age symbol");
-  //   age_sym.dump();
-  // }
-  std::cout << "expr for get_binary_operator_expr is " << expr.dump(4) << std::endl;
+  // std::cout << "expr for get_binary_operator_expr is " << expr.dump(4) << std::endl;
   // preliminary step for recursive BinaryOperation
   current_BinOp_type.push(&(expr["typeDescriptions"]));
 
@@ -2268,19 +2468,22 @@ bool solidity_convertert::get_binary_operator_expr(
   }
   else
     assert(!"should not be here - unrecognized LHS and RHS keywords in expression JSON");
-
+  
   // 2. Get type
   typet t;
   assert(current_BinOp_type.size());
   const nlohmann::json &binop_type = *(current_BinOp_type.top());
-  
+  std::cout << "binop_type is " << binop_type.dump(4) << std::endl;
+
   // Subject to change
   // Could change get_type_description, but that may affect existing codes elsewhere
   // A suggestion is to add TupleTypeName as a type for it though if we are going to change something
   if(binop_type["typeIdentifier"] == "t_tuple$__$")
   {
     new_expr = rhs;
-    // std::cout << "expr after copying is " << new_expr << std::endl;
+    std::cout << "expr after copying in t_tuple$__$" << std::endl;
+    new_expr.dump();
+    std::cout << "-------------------------------------------------------------------" << std::endl;
     current_BinOp_type.pop();
     return false;
   }
@@ -2301,8 +2504,6 @@ bool solidity_convertert::get_binary_operator_expr(
   case SolidityGrammar::ExpressionT::BO_Assign:
   {
     new_expr = side_effect_exprt("assign", t);
-    log_status("Dumping new_expr for assign");
-    new_expr.dump();
     break;
   }
   case SolidityGrammar::ExpressionT::BO_Add:
@@ -2395,8 +2596,6 @@ bool solidity_convertert::get_binary_operator_expr(
   case SolidityGrammar::ExpressionT::BO_EQ:
   {
     new_expr = exprt("=", t);
-    log_status("Dumping new_expr for ==");
-    new_expr.dump();
     break;
   }
   case SolidityGrammar::ExpressionT::BO_LAnd:
@@ -2499,8 +2698,8 @@ bool solidity_convertert::get_binary_operator_expr(
 
   // 4. Copy to operands
   new_expr.copy_to_operands(lhs, rhs);
-  log_status("Finished copying operands");
-  new_expr.dump();
+  // log_status("Finished copying operands");
+  // new_expr.dump();
   // Pop current_BinOp_type.push as we've finished this conversion
   current_BinOp_type.pop();
 
@@ -4068,6 +4267,7 @@ void solidity_convertert::convert_expression_to_code(exprt &expr)
   if (expr.is_code())
     return;
 
+  log_status("expr is not code and will be parsed");
   codet code("expression");
   code.location() = expr.location();
   code.move_to_operands(expr);
