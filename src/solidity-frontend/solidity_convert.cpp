@@ -40,6 +40,7 @@ solidity_convertert::solidity_convertert(
 
 bool solidity_convertert::convert()
 {
+  std::cout << "testing convert" << std::endl;
   // This function consists of two parts:
   //  1. First, we perform pattern-based verificaiton
   //  2. Then we populate the context with symbols annotated based on the each AST node, and hence prepare for the GOTO conversion.
@@ -64,6 +65,7 @@ bool solidity_convertert::convert()
   for (nlohmann::json::iterator itr = nodes.begin(); itr != nodes.end();
        ++itr, ++index)
   {
+    std::cout << "check 0 " << std::endl;
     // ignore the meta information and locate nodes in ContractDefinition
     std::string node_type = (*itr)["nodeType"].get<std::string>();
     if (node_type == "ContractDefinition") // contains AST nodes we need
@@ -85,6 +87,7 @@ bool solidity_convertert::convert()
   // populate exportedSymbolsList
   for (const auto &itr : ast_json["exportedSymbols"].items())
   {
+    std::cout << "check 1 " << std::endl;
     //! Assume a contract has only one id
     int c_id = itr.value()[0].get<int>();
     std::string c_name = itr.key();
@@ -98,6 +101,7 @@ bool solidity_convertert::convert()
   for (nlohmann::json::iterator itr = nodes.begin(); itr != nodes.end();
        ++itr, ++index)
   {
+    std::cout << "Check 2" << std::endl;
     if (get_noncontract_defition(*itr))
       return true;
   }
@@ -109,6 +113,8 @@ bool solidity_convertert::convert()
   for (nlohmann::json::iterator itr = nodes.begin(); itr != nodes.end();
        ++itr, ++index)
   {
+    std::cout << "check 3 " << std::endl;
+
     std::string node_type = (*itr)["nodeType"].get<std::string>();
 
     if (node_type == "ContractDefinition") // rule source-unit
@@ -120,6 +126,7 @@ bool solidity_convertert::convert()
            ittr != ast_nodes.end();
            ++ittr)
       {
+        std::cout << "check 4 " << std::endl;
         if (get_noncontract_defition(*ittr))
           return true;
       }
@@ -133,6 +140,7 @@ bool solidity_convertert::convert()
 
       // add a struct symbol for each contract
       // e.g. contract Base => struct Base
+      std::cout << "Going to perform get_struct_class" << std::endl;
       if (get_struct_class(*itr))
         return true;
 
@@ -171,6 +179,7 @@ bool solidity_convertert::convert()
 
 bool solidity_convertert::convert_ast_nodes(const nlohmann::json &contract_def)
 {
+  std::cout << "testing convert_ast_nodes" << std::endl;
   unsigned index = 0;
   nlohmann::json ast_nodes = contract_def["nodes"];
   for (nlohmann::json::iterator itr = ast_nodes.begin(); itr != ast_nodes.end();
@@ -200,6 +209,7 @@ bool solidity_convertert::get_decl(
   const nlohmann::json &ast_node,
   exprt &new_expr)
 {
+  std::cout << "testing get_decl here" << std::endl;
   new_expr = code_skipt();
 
   if (!ast_node.contains("nodeType"))
@@ -365,7 +375,7 @@ bool solidity_convertert::get_var_decl(
   // 6. add symbol into the context
   // just like clang-c-frontend, we have to add the symbol before converting the initial assignment
   symbolt &added_symbol = *move_symbol_to_context(symbol);
-
+  
   // 7. populate init value if there is any
   code_declt decl(symbol_expr(added_symbol));
 
@@ -388,7 +398,7 @@ bool solidity_convertert::get_var_decl(
 
   decl.location() = location_begin;
   new_expr = decl;
-
+  // context.dump();
   return false;
 }
 
@@ -486,6 +496,7 @@ bool solidity_convertert::get_struct_class(const nlohmann::json &struct_def)
     }
     case SolidityGrammar::ContractBodyElementT::FunctionDef:
     {
+      std::cout << "Doing FunctionDef in get_struct_class" << std::endl;
       if (get_struct_class_method(*itr, t))
         return true;
       break;
@@ -508,7 +519,6 @@ bool solidity_convertert::get_struct_class(const nlohmann::json &struct_def)
   t.location() = location_begin;
   added_symbol.type = t;
 
-  // std::cout << "Returning from end of get_struct_class " << std::endl;
   return false;
 }
 
@@ -549,10 +559,9 @@ bool solidity_convertert::get_struct_class_method(
   return false;
 }
 
-//Used to create a struct from tuple
-//Struct will be populated with variables
-//The variables within the struct will not be initialized
-std::tuple<bool, std::string> solidity_convertert::get_struct_tuple(
+
+
+std::tuple<bool, std::string> solidity_convertert::populate_tuple_array(
   const nlohmann::json &struct_def)
 {
   //This function should only be used for TupleExpressions
@@ -587,7 +596,6 @@ std::tuple<bool, std::string> solidity_convertert::get_struct_tuple(
 
   name = "tuple#" + label;
   id = "sol:@C@" + current_contractName + "@" + name;
-  std::cout << "Printing tuple id " << id << std::endl;
   t.tag(id);  
 
   // 2. Check if the struct symbol is already added to the context, do nothing if it is
@@ -595,8 +603,8 @@ std::tuple<bool, std::string> solidity_convertert::get_struct_tuple(
   //  If we found it, then we return
   if (context.find_symbol(id) != nullptr)
   {
-    std::cout << "Found Struct Symbol " << std::endl;
-    return {true, id};  
+    // std::cout << "Found Struct Symbol " << std::endl;
+    return {true, id};
   }
 
   else
@@ -624,50 +632,94 @@ std::tuple<bool, std::string> solidity_convertert::get_struct_tuple(
   assert(struct_def.contains("components"));
   nlohmann::json ast_nodes = struct_def["components"];
 
-  std::cout << "Populating identifiers" << std::endl;
-  // 6. Populate the Identifiers 
-
-  // std::string contract_name;
-  // if(get_current_contract_name(struct_def, contract_name))
-  // {
-  //   return true;
-  // }
-
-  for (unsigned int i = 0; i < ast_nodes.size(); i++)
-  
+  for(unsigned int i = 0; i < ast_nodes.size(); i++)
   {
-    //nodeType of the components
     struct_typet::componentt comp;
-    SolidityGrammar::ExpressionT type = 
-      SolidityGrammar::get_expression_t(ast_nodes.at(i));
+    std::cout << "ast_node at index " << i << " is: " << ast_nodes.at(i) << std::endl;
     
-    // You can use tuple assignments with: 
-    //    - Primitive Types (Identifier): Such as uint, bool, address, bytes, string, etc.
-    //    - Arrays          (IndexAccess)
-    //    - Mappings        (IndexAccess)
-    //    - Struct Instances(MemberAccess)
+    // If we get a nullptr, we just loop through the whole components list
+    // Until we get a valid Json
+    // Note that this Json is only used as a temp placeholder and will not be used when combining with RHS
+    // This solution will also work for an instance where it is all nullptr values
+    if(ast_nodes.at(i) == nullptr)
+    {
+      std::cout << "null detected at index " << i << std::endl;
+      
+      nlohmann::json temp_node;
+      uint tmp_index = 0;
+      while(temp_node == nullptr && tmp_index < ast_nodes.size())
+      {
+        std::cout << "tmp index is: " << tmp_index << std::endl;
+        if(ast_nodes.at(tmp_index) == nullptr)
+        {
+          tmp_index++;
+          continue;
+        }
+        std::cout << "tmp index is: " << tmp_index << std::endl;
 
-    assert(type == SolidityGrammar::ExpressionT::DeclRefExprClass ||
-           type == SolidityGrammar::ExpressionT::StructMemberCall ||
-           type == SolidityGrammar::ExpressionT::IndexAccess);
+        temp_node = ast_nodes.at(tmp_index);
+        tmp_index++;
+      }
+      std::cout << "taking inspiration from index " << i << std::endl;
+      
+      // Check final time if temp_node is nullptr
+      if(temp_node != nullptr)
+      {
+        if(get_expr(temp_node, temp_node, comp))
+          assert(!"This variable has yet to be declared...aborting"); 
 
-    std::cout << "itr is " << ast_nodes.at(i) << std::endl;
+        t.components().push_back(comp);
+        jsonTupleComponents.push(ast_nodes.at(i));
+        continue;
+      }
+    }
 
-    if(get_expr(ast_nodes.at(i), ast_nodes.at(i)["typeDescriptions"], comp))
-      assert(!"This variable has yet to be declared...aborting");
+    else
+    {
+      std::cout << "astjson detected at index " << i <<  std::endl;
+      SolidityGrammar::ExpressionT type = 
+        SolidityGrammar::get_expression_t(ast_nodes.at(i));
+      
+      // You can use tuple assignments with: 
+      //    - Primitive Types (Identifier): Such as uint, bool, address, bytes, string, etc.
+      //    - Arrays          (IndexAccess)
+      //    - Mappings        (IndexAccess)
+      //    - Struct Instances(MemberAccess)
+      //    - NUllptr
 
-    t.components().push_back(comp);
-    std::cout << "Finished adding a component to the struct" << std::endl;
+      assert(type == SolidityGrammar::ExpressionT::DeclRefExprClass ||
+            type == SolidityGrammar::ExpressionT::StructMemberCall ||
+            type == SolidityGrammar::ExpressionT::IndexAccess);
+
+      if(get_expr(ast_nodes.at(i), ast_nodes.at(i)["typeDescriptions"], comp))
+        assert(!"This variable has yet to be declared...aborting"); 
+
+      t.components().push_back(comp);
+      jsonTupleComponents.push(ast_nodes.at(i));
+    }
   }
 
-  t.location() = location_begin;
-  added_symbol.type = t;
-  std::cout << "Dumping struct" << std::endl;
-  // Save the label into tupleStack to be used by RHS
-
+  check_tuple_components(jsonTupleComponents);
   tupleQueueIds.push(label);
 
+  added_symbol.type = t;
+
   return {false, id};
+}
+
+// purely for debugging the tuple_components
+void solidity_convertert::check_tuple_components(std::queue<nlohmann::json> queue)
+{
+  std::cout << "------------------------------" << std::endl;
+  std::queue<nlohmann::json> temp = queue;
+  while(!temp.empty())
+  {
+    std::cout << "Printing out tuple components from queue" << std::endl;
+    nlohmann::json poppedValue = temp.front();
+    std::cout << poppedValue.dump(4) << std::endl;
+    temp.pop();
+  }
+  std::cout << "------------------------------" << std::endl;
 }
 
 bool solidity_convertert::get_noncontract_defition(nlohmann::json &ast_node)
@@ -851,6 +903,7 @@ bool solidity_convertert::get_function_definition(
       ["implemented"]) // TODO: for interface function, it's just a definition. Add something like "&& isInterface_JustDefinition()"
     return false;
 
+  // std::cout << "ast_node for function definition is" << ast_node.dump(4) << std::endl;
   // Check intrinsic functions
   if (check_intrinsic_function(ast_node))
     return false;
@@ -1040,19 +1093,66 @@ bool solidity_convertert::get_block(
   case SolidityGrammar::BlockT::Statement:
   {
     const nlohmann::json &stmts = block["statements"];
+    // std::cout << "Dumping statements in statement block " << stmts.dump(4) << std::endl;
 
     code_blockt _block;
     unsigned ctr = 0;
     // items() returns a key-value pair with key being the index
     for (auto const &stmt_kv : stmts.items())
     {
+      nlohmann::json cur_stmt = stmt_kv.value();
+      // std::cout << "block statement " << cur_stmt.dump(4) << std::endl;
       exprt statement;
-      if (get_statement(stmt_kv.value(), statement))
+      if (get_statement(cur_stmt, statement))
         return true;
+      
+      bool is_tuple = false;
 
-      convert_expression_to_code(statement);
-      _block.operands().push_back(statement);
-      ++ctr;
+      // std::cout << "stmt_kv is " << cur_stmt.dump(4) << std::endl;
+      SolidityGrammar::StatementT stmt_type = SolidityGrammar::get_statement_t(cur_stmt);
+      if(stmt_type == SolidityGrammar::StatementT::ExpressionStatement)
+      {
+        SolidityGrammar::ExpressionT exprType = SolidityGrammar::get_expression_t(cur_stmt["expression"]);
+        if(exprType == SolidityGrammar::ExpressionT::BinaryOperatorClass)
+        {
+          if(cur_stmt["expression"].contains("leftHandSide"))
+          {
+            nlohmann::json tuple_desc = cur_stmt["expression"]["leftHandSide"]["typeDescriptions"];
+            if (tuple_desc.contains("typeString"))
+            {
+              const std::string typeString = tuple_desc["typeString"].get<std::string>();
+              if(typeString.substr(0,6) == "tuple(")
+              {
+                if(!tuple_desc.contains("tuple()"))
+                {
+                  is_tuple = true;
+                  log_status("is_tuple is turned on");
+                }
+              }
+            }
+          }
+        }
+      }
+
+      log_status("statement after stmt_kv is ");
+      statement.dump();
+      
+      if(is_tuple)
+      {
+        std::vector<exprt> tuple_operand = statement.operands();
+        for(exprt &exprt_op : tuple_operand)
+        {
+          convert_expression_to_code(exprt_op);
+          _block.operands().push_back(exprt_op);
+          ++ctr;
+        }
+      }
+      else
+      {
+        convert_expression_to_code(statement);
+        _block.operands().push_back(statement);
+        ++ctr;
+      }
     }
     log_debug("solidity", " \t@@@ CompoundStmt has {} statements", ctr);
 
@@ -1417,9 +1517,10 @@ bool solidity_convertert::get_expr(
   {
   case SolidityGrammar::ExpressionT::BinaryOperatorClass:
   {
+    // std::cout << "BinaryOperatorClass" << expr.dump(4) << "\n" << std::endl;
+    // context.dump();
     if (get_binary_operator_expr(expr, new_expr))
       return true;
-
     break;
   }
   case SolidityGrammar::ExpressionT::UnaryOperatorClass:
@@ -1437,6 +1538,7 @@ bool solidity_convertert::get_expr(
   }
   case SolidityGrammar::ExpressionT::DeclRefExprClass:
   {
+    // std::cout << "DeclRefExprClass: " << expr.dump(4) << "\n" << std::endl;
     if (expr["referencedDeclaration"] > 0)
     {
       // for Contract Type Identifier Only
@@ -1682,7 +1784,18 @@ bool solidity_convertert::get_expr(
     }
 
     // case 3
-    // Function we need to implement
+    //We will use a code block as the new_expr this
+      /*
+      {
+        (a,b) = (1,2)
+        ==>
+        if(true)
+        {
+          a=1;
+          b=2;
+        }
+      }
+      */
     // There will be 2 passes. One for left side, One for right side
     case SolidityGrammar::TypeNameT::TupleTypeName: // case 3
     {
@@ -1690,50 +1803,88 @@ bool solidity_convertert::get_expr(
       //(RHS) If true means that we found an existing struct symbol 
       //(LHS) If false means that we JUST finished creating the struct symbol
       //We should get the id that was used for the struct
-      auto [ret, id] = get_struct_tuple(expr);
+      auto [ret, id] = populate_tuple_array(expr);
       if(!ret)
       {
         //LHS
-        std::cout << "Finished Creating a Struct Symbol " << std::endl;
-        std::cout << "----------------------------------\n" << std::endl;
         return false;
       }
 
-      //Do we need to deal with mismatch of types? 
-      
-      //RHS 
+      std::cout << "Parsing RHS now" << std::endl;
+
+      //RHS
       assert(!current_contractName.empty());
-      std::cout << "Trying to find struct symbol " << id << std::endl;
       //Get the struct that represents a tuple
+      //We dont really care about the components, all we care about is the number of components
       symbolt tuple_struct_sym = *context.find_symbol(id);
-      
-      typet tuple_struct_type = tuple_struct_sym.type;
+      typet tuple_struct_type = tuple_struct_sym.type;  
       exprt tuple_struct_exprt = gen_zero(tuple_struct_type);
+
       const nlohmann::json components = expr["components"];
 
-      // std::cout << "Populating Struct with exprt containing x_variables: " << tuple_struct_exprt.components << std::endl;
+      locationt location;
+      get_start_location_from_stmt(expr, location);
+
+            // guard: nondet_bool()
+      if (context.find_symbol("c:@F@nondet_bool") == nullptr)
+      {
+        log_status("Unable to find guard expression");
+        return true;
+      }
+
+      code_blockt _block;
+      // codet while_body;
+      // while_body.make_block();
+
       for (unsigned int i = 0; i < tuple_struct_exprt.operands().size(); i++)
       {
-        exprt init;
-        if(get_expr(components.at(i), components.at(i)["typeDescriptions"], init))
+        std::cout << "Parsing Components in a tuple expression " << i << std::endl;
+
+        exprt rhs;
+        exprt lhs;
+        nlohmann::json lhsJson;
+
+        //statement is combination of lhs = rhs
+        // e.g. (x,y) = (1,2)
+        // For this iteration, x = 1
+        // For next iteration, y = 2
+        exprt assignment;
+
+        if(get_expr(components.at(i), components.at(i)["typeDescriptions"], rhs))
+          return true;
+
+        lhsJson = jsonTupleComponents.front();
+        jsonTupleComponents.pop();
+        std::cout << "lhsJson is " << lhsJson << std::endl;
+        if(lhsJson == nullptr)
         {
-          std::cout << "Unable to parse components" << std::endl;
+          continue;
+        }
+
+
+        if(get_expr(lhsJson, lhsJson["typeDescriptions"], lhs))
+        {
           return true;
         }
-        
-        const struct_union_typet::componentt *c =
-          &to_struct_type(tuple_struct_type).components().at(i);
-        typet elem_type = c->type();
 
-        solidity_gen_typecast(ns, init, elem_type);
-        tuple_struct_exprt.operands().at(i) = init;  
+        typet t;
+        if(get_type_description(lhsJson["typeDescriptions"], t))
+          return true;
+
+        assignment = side_effect_exprt("assign", t);
+        assignment.copy_to_operands(lhs, rhs);
+        std::cout << "assignment at index" << i << std::endl;
+        assignment.dump();
+
+        _block.move_to_operands(assignment);
+
       }
-      //function to loop through struct components
-        //We add in RHS values one by one in order
-        //There should not be any mismatch of types or else it will throw compiler error
-      new_expr = tuple_struct_exprt;
-      std::cout << "Dumping new_expr" << std::endl;
-      new_expr.dump();
+
+      locationt location_end;
+      get_final_location_from_stmt(expr, location_end);
+      _block.end_location(location_end);
+
+      new_expr = _block;
       break;
     }
 
@@ -1750,6 +1901,7 @@ bool solidity_convertert::get_expr(
   }
   case SolidityGrammar::ExpressionT::CallExprClass:
   {
+    // std::cout << "CallExprClass " << expr.dump(4) << "\n" << std::endl;
     // 1. Get callee expr
     const nlohmann::json &callee_expr_json = expr["expression"];
 
@@ -1922,6 +2074,7 @@ bool solidity_convertert::get_expr(
   }
   case SolidityGrammar::ExpressionT::ImplicitCastExprClass:
   {
+    // std::cout << "ImplicitCastExprClass" << expr << std::endl;
     if (get_cast_expr(expr, new_expr, literal_type))
       return true;
     break;
@@ -2232,6 +2385,7 @@ bool solidity_convertert::get_binary_operator_expr(
   const nlohmann::json &expr,
   exprt &new_expr)
 {
+  // std::cout << "expr for get_binary_operator_expr is " << expr.dump(4) << std::endl;
   // preliminary step for recursive BinaryOperation
   current_BinOp_type.push(&(expr["typeDescriptions"]));
 
@@ -2261,11 +2415,26 @@ bool solidity_convertert::get_binary_operator_expr(
   }
   else
     assert(!"should not be here - unrecognized LHS and RHS keywords in expression JSON");
-
+  
   // 2. Get type
   typet t;
   assert(current_BinOp_type.size());
   const nlohmann::json &binop_type = *(current_BinOp_type.top());
+  std::cout << "binop_type is " << binop_type.dump(4) << std::endl;
+
+  // Subject to change
+  // Could change get_type_description, but that may affect existing codes elsewhere
+  // A suggestion is to add TupleTypeName as a type for it though if we are going to change something
+  if(binop_type["typeIdentifier"] == "t_tuple$__$")
+  {
+    new_expr = rhs;
+    std::cout << "expr after copying in t_tuple$__$" << std::endl;
+    new_expr.dump();
+    std::cout << "-------------------------------------------------------------------" << std::endl;
+    current_BinOp_type.pop();
+    return false;
+  }
+
   if (get_type_description(binop_type, t))
     return true;
 
@@ -2476,7 +2645,8 @@ bool solidity_convertert::get_binary_operator_expr(
 
   // 4. Copy to operands
   new_expr.copy_to_operands(lhs, rhs);
-
+  // log_status("Finished copying operands");
+  // new_expr.dump();
   // Pop current_BinOp_type.push as we've finished this conversion
   current_BinOp_type.pop();
 
@@ -2780,6 +2950,7 @@ bool solidity_convertert::get_func_decl_ref(
   const nlohmann::json &decl,
   exprt &new_expr)
 {
+  std::cout << "get_func_decl_ref" << std::endl;
   // Function to configure new_expr that has a +ve referenced id, referring to a function declaration
   // This allow to get func symbol before we add it to the symbol table
   assert(decl["nodeType"] == "FunctionDefinition");
@@ -2875,11 +3046,10 @@ bool solidity_convertert::get_type_description(
   const nlohmann::json &type_name,
   typet &new_type)
 {
-  std::cout << "Getting Type Name " << type_name << std::endl;
-  // For Solidity rule type-name:
+  // std::cout << "Getting Type Name " << type_name << std::endl;
+  // For Solidity rule type-name:DeclRefExprClass
   SolidityGrammar::TypeNameT type = SolidityGrammar::get_type_name_t(type_name);
 
-  // std::cout << "rule type name " << type << std::endl;
   switch (type)
   {
   case SolidityGrammar::TypeNameT::ElementaryTypeName:
@@ -3149,7 +3319,6 @@ bool solidity_convertert::get_type_description(
   }
   default:
   {
-    // std::cout << "testing struct type name " << std::endl;
     log_debug(
       "solidity",
       "	@@@ got type name=SolidityGrammar::TypeNameT::{}",
@@ -3178,11 +3347,12 @@ bool solidity_convertert::get_func_decl_ref_type(
   // Similar to the function get_type_description()
   SolidityGrammar::FunctionDeclRefT type =
     SolidityGrammar::get_func_decl_ref_t(decl);
-
+  std::cout << "get_func_decl_ref_type" << std::endl;
   switch (type)
   {
   case SolidityGrammar::FunctionDeclRefT::FunctionNoProto:
   {
+    std::cout << "NoProto" << std::endl;
     code_typet type;
 
     // Return type
@@ -3202,6 +3372,7 @@ bool solidity_convertert::get_func_decl_ref_type(
   }
   case SolidityGrammar::FunctionDeclRefT::FunctionProto:
   {
+    std::cout << "Proto" << std::endl;
     code_typet type;
 
     // store current state
@@ -3542,6 +3713,7 @@ bool solidity_convertert::get_parameter_list(
   }
   case SolidityGrammar::ParameterListT::NONEMPTY:
   {
+    // std::cout << "type name for parameter list is " << type_name.dump(4) << std::endl;
     assert(
       type_name["parameters"].size() ==
       1); // TODO: Fix me! assuming one return parameter
@@ -3617,7 +3789,6 @@ void solidity_convertert::get_var_decl_name(
     assert(!current_functionName.empty());
     id = "sol:@C@" + contract_name + "@F@" + current_functionName + "@" + name +
          "#" + i2string(ast_node["id"].get<std::int16_t>());
-    log_status("Id is ", id);
   }
   else if (ast_node.contains("scope"))
   {
@@ -4047,6 +4218,7 @@ void solidity_convertert::convert_expression_to_code(exprt &expr)
   if (expr.is_code())
     return;
 
+  log_status("expr is not code and will be parsed");
   codet code("expression");
   code.location() = expr.location();
   code.move_to_operands(expr);
