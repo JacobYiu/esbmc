@@ -200,7 +200,8 @@ unsigned int bytesn_type_name_to_size(ElementaryTypeNameT);
 enum ParameterListT
 {
   EMPTY = 0, // In Solidity, "void" means an empty parameter list
-  NONEMPTY,
+  ONE,
+  MORE_THAN_ONE,
   ParameterListTError
 };
 ParameterListT get_parameter_list_t(const nlohmann::json &type_name);
@@ -247,6 +248,7 @@ enum ExpressionT
   // BinaryOperator
   BinaryOperatorClass =
     0, // This type covers all binary operators in Solidity, such as =, +, - .etc
+  TupleBinaryOperatorClass,
   BO_Assign, // =
   BO_Add,    // +
   BO_Sub,    // -

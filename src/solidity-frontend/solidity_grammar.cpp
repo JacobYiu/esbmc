@@ -507,9 +507,20 @@ ParameterListT get_parameter_list_t(const nlohmann::json &type_name)
   {
     return EMPTY;
   }
+
+  else if(type_name["parameters"].size() == 1)
+  {
+    return ONE;
+  }
+
+  else if(type_name["parameters"].size() > 1)
+  {
+    return MORE_THAN_ONE;
+  }
+
   else
   {
-    return NONEMPTY;
+
   }
 
   return ParameterListTError; // to make some old gcc compilers happy
@@ -520,7 +531,8 @@ const char *parameter_list_to_str(ParameterListT type)
   switch (type)
   {
     ENUM_TO_STR(EMPTY)
-    ENUM_TO_STR(NONEMPTY)
+    ENUM_TO_STR(ONE)
+    ENUM_TO_STR(MORE_THAN_ONE)
     ENUM_TO_STR(ParameterListTError)
   default:
   {
@@ -662,8 +674,13 @@ const char *statement_to_str(StatementT type)
 // rule expression
 ExpressionT get_expression_t(const nlohmann::json &expr)
 {
+  std::cout << "expr nodeType is " << expr.dump(4) << std::endl;
   if (expr["nodeType"] == "Assignment" || expr["nodeType"] == "BinaryOperation")
   {
+    if(expr.contains("typeDescriptions") && expr["typeDescriptions"]["typeIdentifier"] == "t_tuple$__$")
+    {
+      return TupleBinaryOperatorClass;
+    }
     return BinaryOperatorClass;
   }
   else if (expr["nodeType"] == "UnaryOperation")
@@ -904,6 +921,7 @@ const char *expression_to_str(ExpressionT type)
   switch (type)
   {
     ENUM_TO_STR(BinaryOperatorClass)
+    ENUM_TO_STR(TupleBinaryOperatorClass)
     ENUM_TO_STR(BO_Assign)
     ENUM_TO_STR(BO_Add)
     ENUM_TO_STR(BO_Sub)

@@ -260,8 +260,7 @@ bool solidity_convertert::get_var_decl_stmt(
 
   SolidityGrammar::VarDeclStmtT type =
     SolidityGrammar::get_var_decl_stmt_t(ast_node);
-  log_debug(
-    "solidity",
+  log_status(
     "	@@@ got Variable-declaration-statement: "
     "SolidityGrammar::VarDeclStmtT::{}",
     SolidityGrammar::var_decl_statement_to_str(type));
@@ -288,6 +287,7 @@ bool solidity_convertert::get_var_decl(
   const nlohmann::json &ast_node,
   exprt &new_expr)
 {
+  std::cout << "at get_var_decl is " << ast_node.dump(4) << std::endl;
   // For Solidity rule state-variable-declaration:
   // 1. populate typet
   typet t;
@@ -319,7 +319,8 @@ bool solidity_convertert::get_var_decl(
     if (get_type_description(ast_node["typeName"]["typeDescriptions"], t))
       return true;
   }
-
+  log_status("Type at get_var_decl_ref is ");
+  t.dump();
   bool is_state_var = ast_node["stateVariable"] == true;
 
   // 2. populate id and name
@@ -338,6 +339,8 @@ bool solidity_convertert::get_var_decl(
   {
     assert(current_functionName != "");
     get_var_decl_name(ast_node, name, id);
+    std::cout << "name at get_var_decl is: " << name << std::endl;
+    std::cout << "id at get_var_decl is: " << id << std::endl;
   }
   else
   {
@@ -375,12 +378,15 @@ bool solidity_convertert::get_var_decl(
   // 6. add symbol into the context
   // just like clang-c-frontend, we have to add the symbol before converting the initial assignment
   symbolt &added_symbol = *move_symbol_to_context(symbol);
+  log_status("added_symbol at get_var_decl");
+  added_symbol.dump();
   
   // 7. populate init value if there is any
   code_declt decl(symbol_expr(added_symbol));
 
   if (has_init)
   {
+    log_status("Has init");
     nlohmann::json init_value =
       is_state_var ? ast_node["value"] : ast_node["initialValue"];
     nlohmann::json literal_type = ast_node["typeDescriptions"];
@@ -389,8 +395,9 @@ bool solidity_convertert::get_var_decl(
     exprt val;
     if (get_expr(init_value, literal_type, val))
       return true;
-
     solidity_gen_typecast(ns, val, t);
+    std::cout << "val is " << std::endl;
+    val.dump();
 
     added_symbol.value = val;
     decl.operands().push_back(val);
@@ -398,7 +405,8 @@ bool solidity_convertert::get_var_decl(
 
   decl.location() = location_begin;
   new_expr = decl;
-  // context.dump();
+  log_status("end of get_var_decl");
+  new_expr.dump();
   return false;
 }
 
@@ -437,6 +445,8 @@ bool solidity_convertert::get_struct_class(const nlohmann::json &struct_def)
   // already in the context.
   if (context.find_symbol(id) != nullptr)
     return false;
+  
+  std::cout << "id at get_struct_class is " << id << std::endl;
 
   // 3. populate location
   locationt location_begin;
@@ -467,11 +477,6 @@ bool solidity_convertert::get_struct_class(const nlohmann::json &struct_def)
     ast_nodes = struct_def["nodes"];
   else if (struct_def.contains("members"))
     ast_nodes = struct_def["members"];
-  //Not sure
-  // else if(struct_def.contains("nodeType"))
-  // {
-  //   ast_nodes = struct_def["components"];
-  // }
   else
   {
     // Defining empty structs is disallowed.
@@ -479,9 +484,12 @@ bool solidity_convertert::get_struct_class(const nlohmann::json &struct_def)
     log_warning("Empty contract.");
   }
 
+  uint count = 0;
   for (nlohmann::json::iterator itr = ast_nodes.begin(); itr != ast_nodes.end();
        ++itr)
   {
+    std::cout << "At count " << count << std::endl;
+    count++;
     SolidityGrammar::ContractBodyElementT type =
       SolidityGrammar::get_contract_body_element_t(*itr);
 
@@ -497,6 +505,15 @@ bool solidity_convertert::get_struct_class(const nlohmann::json &struct_def)
     case SolidityGrammar::ContractBodyElementT::FunctionDef:
     {
       std::cout << "Doing FunctionDef in get_struct_class" << std::endl;
+      // if(context.find_symbol("sol:@C@StructExample@F@main#18") == nullptr)
+      // {
+      //   log_status("Not here");
+      // }
+
+      // else
+      // {
+      //   assert(!"Found StructExample here");
+      // }
       if (get_struct_class_method(*itr, t))
         return true;
       break;
@@ -518,11 +535,14 @@ bool solidity_convertert::get_struct_class(const nlohmann::json &struct_def)
 
   t.location() = location_begin;
   added_symbol.type = t;
+  log_status("Symbol after get struct class");
+  added_symbol.dump();
+  // assert(!"Stop here at added_symbol");
 
   return false;
 }
 
-bool solidity_convertert::get_struct_class_fields(
+bool solidity_convertert:: get_struct_class_fields(
   const nlohmann::json &ast_node,
   struct_typet &type)
 {
@@ -559,11 +579,131 @@ bool solidity_convertert::get_struct_class_method(
   return false;
 }
 
+bool solidity_convertert::get_struct_return_template(
+  const nlohmann::json &function_node)
+{
+  // 1. populate name and id
+  std::string id, name, label;
+  struct_typet t = struct_typet();
 
+  // Conversion of multiple return types.
+  // Needs a struct which is the name of the function 
+  // e.g. "tag-struct MyContract.tupleOut"
+  assert(!current_contractName.empty());
+  log_status("Before populating name and id");
+  name = function_node["name"].get<std::string>();
+  id = prefix + "struct " + current_contractName + "." + current_functionName;
+  t.tag("struct " + name);  
+
+  // 2. Check if the struct symbol is already added to the context, do nothing if it is
+  // already in the context.
+  //  If we found it, then we return
+  if (context.find_symbol(id) != nullptr)
+  {
+    std::cout << "Found Struct Symbol in get_param_list" << std::endl; 
+    return false;
+  }
+
+  else
+  {
+    std::cout << "Have not been able to find a struct symbol..Creating struct symbol" << std::endl;
+  }
+
+  // 3. populate location
+  locationt location_begin;
+  get_location_from_decl(function_node, location_begin);
+
+  // 4. populate debug module name
+  std::string debug_modulename =
+    get_modulename_from_path(location_begin.file().as_string());
+  current_fileName = debug_modulename;
+
+  // 5. set symbol attributes for the struct
+  symbolt symbol;
+  get_default_symbol(symbol, debug_modulename, t, name, id, location_begin);
+
+  symbol.is_type = true;
+  symbolt &added_symbol = *move_symbol_to_context(symbol);
+
+  // populate the scope_map
+  // this map is used to find reference when there is no decl_ref_id provided in the nodes
+  // or replace the find_decl_ref in order to speed up
+  int scp = function_node["id"].get<int>();
+  scope_map.insert(std::pair<int, std::string>(scp, name));
+
+  nlohmann::json parameters = function_node["returnParameters"]["parameters"];
+  // 6. Populate the struct using return value parameters;
+  for(unsigned int i = 0; i < parameters.size(); i++)
+  {
+    const nlohmann::json element = parameters.at(i);
+
+    struct_typet::componentt comp;
+    SolidityGrammar::VarDeclStmtT type =
+      SolidityGrammar::get_var_decl_stmt_t(element);
+
+    assert(type == SolidityGrammar::VarDeclStmtT::VariableDecl);
+
+    get_struct_class_fields(element, t);
+    std::string comp_label = std::to_string(element["id"].get<int>());
+    std::string comp_name = current_functionName + "#" + comp_label;
+    t.components().at(i).name(comp_name);
+  }
+
+  added_symbol.type = t;
+  log_status("template symbol is");
+  added_symbol.dump();
+  return false;
+}
+
+bool solidity_convertert::get_struct_return_instantiation(
+  const nlohmann::json &function_node, 
+  exprt &new_expr)
+{
+  // 1. Populate the name and id of the instantiated struct return
+  std::string name, id, label;
+  label = "#" + std::to_string(function_node["id"].get<int>());
+  name = function_node["name"].get<std::string>() + "_instantiation";
+  id = "sol:@C@" + current_contractName + "F@" + name + label;
+ 
+  // 2. populate struct_ref_name and id
+  std::string struct_ref_id, struct_ref_name;
+
+  struct_ref_name = function_node["name"].get<std::string>();
+  struct_ref_id = prefix + "struct " + current_contractName + "." + current_functionName;
+
+  // 3. Get the type of the instantiated class 
+  typet t = symbol_typet(struct_ref_id);
+
+  // 4. populate location
+  locationt location_begin;
+  get_location_from_decl(function_node, location_begin);
+
+  // 5. populate debug module name
+  std::string debug_modulename =
+    get_modulename_from_path(location_begin.file().as_string());
+  current_fileName = debug_modulename;
+
+  symbolt symbol;
+  get_default_symbol(symbol, debug_modulename, t, name, id, location_begin);
+
+  symbol.is_type = true;
+  symbolt &added_symbol = *move_symbol_to_context(symbol);
+
+  symbol.lvalue = true;
+  symbol.is_extern = false;
+
+  new_expr = symbol_expr(added_symbol);
+  new_expr.dump();
+
+  return false;
+}
 
 std::tuple<bool, std::string> solidity_convertert::populate_tuple_array(
-  const nlohmann::json &struct_def)
+  const nlohmann::json &struct_def,
+  exprt &new_expr)
 {
+  log_status("Hit populate_tuple_array");
+  std::cout << "pop_tup json_expr is " << struct_def.dump(4) << std::endl; 
   //This function should only be used for TupleExpressions
   assert(struct_def["nodeType"].get<std::string>() == "TupleExpression");
   // 1. populate name and id
@@ -594,6 +734,7 @@ std::tuple<bool, std::string> solidity_convertert::populate_tuple_array(
     label = std::to_string(struct_def["id"].get<int>());
   }
 
+
   name = "tuple#" + label;
   id = "sol:@C@" + current_contractName + "@" + name;
   t.tag(id);  
@@ -603,7 +744,9 @@ std::tuple<bool, std::string> solidity_convertert::populate_tuple_array(
   //  If we found it, then we return
   if (context.find_symbol(id) != nullptr)
   {
-    // std::cout << "Found Struct Symbol " << std::endl;
+    std::cout << "Found Struct Symbol " << std::endl;
+    symbolt symbol = *context.find_symbol(id); 
+    new_expr = gen_zero(symbol.type);
     return {true, id};
   }
 
@@ -660,7 +803,6 @@ std::tuple<bool, std::string> solidity_convertert::populate_tuple_array(
         temp_node = ast_nodes.at(tmp_index);
         tmp_index++;
       }
-      std::cout << "taking inspiration from index " << i << std::endl;
       
       // Check final time if temp_node is nullptr
       if(temp_node != nullptr)
@@ -703,6 +845,7 @@ std::tuple<bool, std::string> solidity_convertert::populate_tuple_array(
   tupleQueueIds.push(label);
 
   added_symbol.type = t;
+  new_expr = gen_zero(t);
 
   return {false, id};
 }
@@ -972,6 +1115,28 @@ bool solidity_convertert::get_function_definition(
     type.arguments().push_back(param);
   }
 
+  // Used purely for multiple return types
+  exprt return_instantiation;
+  bool multi_return = false;
+  log_status("Checking");
+  SolidityGrammar::ParameterListT return_params =
+    SolidityGrammar::get_parameter_list_t(ast_node["returnParameters"]);  
+  if(return_params == SolidityGrammar::ParameterListT::MORE_THAN_ONE)
+  {
+    log_status("More than one");
+    // Create a template for the struct return function
+    multi_return = true;
+    if(get_struct_return_template(ast_node))
+      return true;
+    // Create an instantiation of the struct return function
+    // Just create it for now, assignment is done later after the other functions
+    if(get_struct_return_instantiation(ast_node, return_instantiation))
+      return true;
+    
+    log_status("return_instantiation is");
+    return_instantiation.dump();
+  }
+
   SolidityGrammar::ParameterListT params =
     SolidityGrammar::get_parameter_list_t(ast_node["parameters"]);
   if (params != SolidityGrammar::ParameterListT::EMPTY)
@@ -1003,8 +1168,61 @@ bool solidity_convertert::get_function_definition(
   {
     exprt body_exprt;
     get_block(ast_node["body"], body_exprt);
+    // log_status("get_function_definition body_exprt dump");
+    // body_exprt.dump();
+    if(multi_return)
+    {
+      // 1. Obtain the members of the struct
+      // Note that this is not the instantiated struct we just created
+      // We simply obtain the members so we can populate the members of the struct
+      // Then with a struct type, we assign it to our instantiated struct
+      std::string struct_ref_id, struct_ref_name;
+      struct_ref_name = ast_node["name"].get<std::string>();
+      struct_ref_id = prefix + "struct " + current_contractName + "." + current_functionName;
+      
+      // 2. Check if struct template exists
+      if(context.find_symbol(struct_ref_id) == nullptr)
+      {
+        assert(!"Unable to find the struct template");
+      }
+
+      // 3. Create a static struct used to assign the instantiated struct
+      symbolt struct_template = *context.find_symbol(struct_ref_id);
+      typet struct_template_type = struct_template.type;
+      exprt struct_template_expr = gen_zero(struct_template_type);
+      log_status("struct_template_expr at get_func_def");
+
+      const nlohmann::json arguments = ast_node["returnParameters"]["parameters"];
+      const nlohmann::json statements = ast_node["body"]["statements"];
+      const nlohmann::json statement_index = statements[statements.size()-1];
+      const nlohmann::json components = statement_index["expression"]["components"];
+      for (unsigned int i = 0; i < arguments.size(); i++)
+      {
+        exprt base = 
+          to_struct_type(struct_template_type).components().at(i);
+
+        exprt lhs = member_exprt(return_instantiation, base.name(), base.type());
+        exprt rhs;
+        log_status("checker before rhs");
+        std::cout << components.at(i)["typeDescriptions"] << std::endl;
+        std::cout << arguments.at(i)["typeDescriptions"] << std::endl;
+        if(get_expr(components.at(i), arguments.at(i)["typeDescriptions"], rhs))
+          return true;
+        
+        typet t;
+        if(get_type_description(arguments.at(i)["typeDescriptions"], t))
+          return true;
+        
+        exprt assignment;
+        assignment = side_effect_exprt("assign", t);
+        assignment.copy_to_operands(lhs, rhs);
+        convert_expression_to_code(assignment);
+        body_exprt.move_to_operands(assignment);
+      }
+    }
 
     added_symbol.value = body_exprt;
+
   }
 
   //assert(!"done - finished all expr stmt in function?");
@@ -1081,8 +1299,7 @@ bool solidity_convertert::get_block(
   get_start_location_from_stmt(block, location);
 
   SolidityGrammar::BlockT type = SolidityGrammar::get_block_t(block);
-  log_debug(
-    "solidity",
+  log_status(
     "	@@@ got Block: SolidityGrammar::BlockT::{}",
     SolidityGrammar::block_to_str(type));
 
@@ -1092,6 +1309,17 @@ bool solidity_convertert::get_block(
   // deal with a block of statements
   case SolidityGrammar::BlockT::Statement:
   {
+    if(context.find_symbol("sol:@C@StructExample@F@main#18") == nullptr)
+    {
+      log_status("Not here");
+    }
+
+    else
+    {
+      symbolt symbol = *context.find_symbol("sol:@C@StructExample@F@main#18");
+      symbol.dump();
+      // assert(!"Found StructExample here");
+    }
     const nlohmann::json &stmts = block["statements"];
     // std::cout << "Dumping statements in statement block " << stmts.dump(4) << std::endl;
 
@@ -1109,33 +1337,20 @@ bool solidity_convertert::get_block(
       bool is_tuple = false;
 
       // std::cout << "stmt_kv is " << cur_stmt.dump(4) << std::endl;
+      log_status("statement after stmt_kv is ");
+      statement.dump();
       SolidityGrammar::StatementT stmt_type = SolidityGrammar::get_statement_t(cur_stmt);
       if(stmt_type == SolidityGrammar::StatementT::ExpressionStatement)
       {
         SolidityGrammar::ExpressionT exprType = SolidityGrammar::get_expression_t(cur_stmt["expression"]);
-        if(exprType == SolidityGrammar::ExpressionT::BinaryOperatorClass)
+        std::cout << "exprType is " << expression_to_str(exprType) << std::endl;
+        if(exprType == SolidityGrammar::ExpressionT::TupleBinaryOperatorClass)
         {
-          if(cur_stmt["expression"].contains("leftHandSide"))
-          {
-            nlohmann::json tuple_desc = cur_stmt["expression"]["leftHandSide"]["typeDescriptions"];
-            if (tuple_desc.contains("typeString"))
-            {
-              const std::string typeString = tuple_desc["typeString"].get<std::string>();
-              if(typeString.substr(0,6) == "tuple(")
-              {
-                if(!tuple_desc.contains("tuple()"))
-                {
-                  is_tuple = true;
-                  log_status("is_tuple is turned on");
-                }
-              }
-            }
-          }
+          is_tuple = true;
+          log_status("is_tuple is turned on");
         }
       }
 
-      log_status("statement after stmt_kv is ");
-      statement.dump();
       
       if(is_tuple)
       {
@@ -1155,7 +1370,7 @@ bool solidity_convertert::get_block(
       }
     }
     log_debug("solidity", " \t@@@ CompoundStmt has {} statements", ctr);
-
+    
     locationt location_end;
     get_final_location_from_stmt(block, location_end);
 
@@ -1202,8 +1417,7 @@ bool solidity_convertert::get_statement(
   // Just pass the new_expr reference to the next layer.
 
   SolidityGrammar::StatementT type = SolidityGrammar::get_statement_t(stmt);
-  log_debug(
-    "solidity",
+  log_status(
     "	@@@ got Stmt: SolidityGrammar::StatementT::{}",
     SolidityGrammar::statement_to_str(type));
 
@@ -1257,6 +1471,7 @@ bool solidity_convertert::get_statement(
   }
   case SolidityGrammar::StatementT::ReturnStatement:
   {
+    // std::cout << "Json at Return Statement is: " << stmt.dump(4) << std::endl;
     if (!current_functionDecl)
     {
       log_error(
@@ -1282,6 +1497,14 @@ bool solidity_convertert::get_statement(
           (*current_functionDecl)["returnParameters"], return_type))
       return true;
 
+    // std::cout << "return type is " <<  return_type.to_string() << std::endl;
+    if(stmt["expression"].contains("components") && stmt["expression"]["components"].size() > 1)
+    {
+      new_expr = code_skipt();
+      break;
+    }
+
+    log_status("Not multiple Params");
     nlohmann::json literal_type = nullptr;
 
     auto expr_type = SolidityGrammar::get_expression_t(stmt["expression"]);
@@ -1311,15 +1534,20 @@ bool solidity_convertert::get_statement(
       }
       Therefore, we need to pass the literal_type value.
       */
-
+    
+    std::cout << "implicit_cast_expr is " << implicit_cast_expr << std::endl;
     exprt val;
     if (get_expr(implicit_cast_expr, literal_type, val))
       return true;
+    
+    log_status("Finished getting implicit expr");
+    std::cout << "**********************************" << std::endl;
 
     solidity_gen_typecast(ns, val, return_type);
     ret_expr.return_value() = val;
-
     new_expr = ret_expr;
+    log_status("Returning new_expr from ReturnStatement");
+    new_expr.dump();
 
     break;
   }
@@ -1517,9 +1745,15 @@ bool solidity_convertert::get_expr(
   {
   case SolidityGrammar::ExpressionT::BinaryOperatorClass:
   {
-    // std::cout << "BinaryOperatorClass" << expr.dump(4) << "\n" << std::endl;
-    // context.dump();
+    log_status("Hit BinaryOperatorClass");
     if (get_binary_operator_expr(expr, new_expr))
+      return true;
+    break;
+  }
+  case SolidityGrammar::ExpressionT::TupleBinaryOperatorClass:
+  {
+    log_status("Hit TupleBinaryOperatorClass");
+    if(get_tuple_binary_operator_expr(expr, new_expr))
       return true;
     break;
   }
@@ -1538,7 +1772,7 @@ bool solidity_convertert::get_expr(
   }
   case SolidityGrammar::ExpressionT::DeclRefExprClass:
   {
-    // std::cout << "DeclRefExprClass: " << expr.dump(4) << "\n" << std::endl;
+    std::cout << "expr at DeclRefExprClass is " << expr << std::endl;
     if (expr["referencedDeclaration"] > 0)
     {
       // for Contract Type Identifier Only
@@ -1553,7 +1787,6 @@ bool solidity_convertert::get_expr(
 
       // Soldity uses +ve odd numbers to refer to var or functions declared in the contract
       const nlohmann::json &decl = find_decl_ref(expr["referencedDeclaration"]);
-
       if (!check_intrinsic_function(decl))
       {
         if (decl["nodeType"] == "VariableDeclaration")
@@ -1612,7 +1845,6 @@ bool solidity_convertert::get_expr(
       if (get_decl_ref_builtin(expr, new_expr))
         return true;
     }
-
     break;
   }
   case SolidityGrammar::ExpressionT::Literal:
@@ -1803,7 +2035,7 @@ bool solidity_convertert::get_expr(
       //(RHS) If true means that we found an existing struct symbol 
       //(LHS) If false means that we JUST finished creating the struct symbol
       //We should get the id that was used for the struct
-      auto [ret, id] = populate_tuple_array(expr);
+      auto [ret, id] = populate_tuple_array(expr, new_expr);
       if(!ret)
       {
         //LHS
@@ -1824,13 +2056,6 @@ bool solidity_convertert::get_expr(
 
       locationt location;
       get_start_location_from_stmt(expr, location);
-
-            // guard: nondet_bool()
-      if (context.find_symbol("c:@F@nondet_bool") == nullptr)
-      {
-        log_status("Unable to find guard expression");
-        return true;
-      }
 
       code_blockt _block;
       // codet while_body;
@@ -1855,7 +2080,6 @@ bool solidity_convertert::get_expr(
 
         lhsJson = jsonTupleComponents.front();
         jsonTupleComponents.pop();
-        std::cout << "lhsJson is " << lhsJson << std::endl;
         if(lhsJson == nullptr)
         {
           continue;
@@ -1901,9 +2125,10 @@ bool solidity_convertert::get_expr(
   }
   case SolidityGrammar::ExpressionT::CallExprClass:
   {
-    // std::cout << "CallExprClass " << expr.dump(4) << "\n" << std::endl;
+    std::cout << "CallExprClass " << expr.dump(4) << "\n" << std::endl;
     // 1. Get callee expr
     const nlohmann::json &callee_expr_json = expr["expression"];
+
 
     if (
       callee_expr_json.contains("nodeType") &&
@@ -1929,6 +2154,7 @@ bool solidity_convertert::get_expr(
       const symbolt s = *context.find_symbol(id);
       typet type = s.type;
 
+      std::cout << "id at CallExprClass MemeberAcess is " << id << std::endl;
       new_expr = exprt("symbol", type);
       new_expr.identifier(id);
       new_expr.cmt_lvalue(true);
@@ -1978,10 +2204,22 @@ bool solidity_convertert::get_expr(
     // wrap it in an ImplicitCastExpr to perform conversion of FunctionToPointerDecay
     nlohmann::json implicit_cast_expr =
       make_implicit_cast_expr(callee_expr_json, "FunctionToPointerDecay");
+      std::cout << "implicit_cast_expr is: " << implicit_cast_expr.dump(4) << std::endl; 
+    
     exprt callee_expr;
     if (get_expr(implicit_cast_expr, callee_expr))
       return true;
 
+    // if(context.find_symbol("sol:@C@StructExample@F@main#18") == nullptr)
+    // {
+    //   log_status("Not here");
+    // }
+
+    // else
+    // {
+    //   assert(!"Found StructExample here");
+    // }
+    
     // 2. Get type
     // extract from the return_type
     assert(callee_expr.is_symbol());
@@ -2016,6 +2254,8 @@ bool solidity_convertert::get_expr(
       }
 
       new_expr = inits;
+      log_status("new_expr after structConstructorCall is");
+      new_expr.dump();
       break;
     }
 
@@ -2069,6 +2309,8 @@ bool solidity_convertert::get_expr(
     }
     log_debug("solidity", "  @@ num_args={}", num_args);
 
+    log_status("Call after CallExprClass is ");
+    call.dump();
     new_expr = call;
     break;
   }
@@ -2256,6 +2498,7 @@ bool solidity_convertert::get_expr(
 
     const int caller_id = callee_expr_json["referencedDeclaration"].get<int>();
 
+    // assert(!"Nopeeee");
     const nlohmann::json caller_expr_json = find_decl_ref(caller_id);
 
     switch (type)
@@ -2420,7 +2663,6 @@ bool solidity_convertert::get_binary_operator_expr(
   typet t;
   assert(current_BinOp_type.size());
   const nlohmann::json &binop_type = *(current_BinOp_type.top());
-  std::cout << "binop_type is " << binop_type.dump(4) << std::endl;
 
   // Subject to change
   // Could change get_type_description, but that may affect existing codes elsewhere
@@ -2429,7 +2671,6 @@ bool solidity_convertert::get_binary_operator_expr(
   {
     new_expr = rhs;
     std::cout << "expr after copying in t_tuple$__$" << std::endl;
-    new_expr.dump();
     std::cout << "-------------------------------------------------------------------" << std::endl;
     current_BinOp_type.pop();
     return false;
@@ -2649,6 +2890,185 @@ bool solidity_convertert::get_binary_operator_expr(
   // new_expr.dump();
   // Pop current_BinOp_type.push as we've finished this conversion
   current_BinOp_type.pop();
+
+  return false;
+}
+
+bool solidity_convertert::get_tuple_binary_operator_expr(
+  const nlohmann::json &expr,
+  exprt &new_expr)
+{
+  std::cout << "expr at get_tuple_binary_operator_expr is" << expr.dump(4) << std::endl;
+  // The expr should contain leftHandSide and rightHandSide
+  assert(expr.contains("leftHandSide"));
+  // preliminary step for recursive TupleBinaryOperation
+  current_BinOp_type.push(&(expr["typeDescriptions"]));
+  
+  // 1. Convert LHS and RHS
+  // It will always be an assignment between LHS and RHS 
+  exprt lhs, rhs;
+
+  // 2. Populate the block with assignements between all LHS and RHS
+  code_blockt _block;
+
+  // 3. Get the appropriate json for further parsing
+  const nlohmann::json lhs_json = expr["leftHandSide"];
+  const nlohmann::json lhs_comp = lhs_json["components"];
+
+  const nlohmann::json rhs_json = expr["rightHandSide"];
+
+  // 4. Create an if statement to check if it is a function call or not
+  // Hardcoded tuple; (x,y) = (1,2)
+  if(rhs_json["nodeType"] != "FunctionCall")
+  {
+    nlohmann::json rhs_comp = rhs_json["components"];
+
+    // 5. Loop through all the components and add to block
+    assert(lhs_json["components"].size() == rhs_json["components"].size());
+    for (unsigned int i = 0;
+        i < lhs_json["components"].size();
+        i++)
+        {
+          //statement is combination of lhs = rhs
+          // e.g. (x,y) = (1,2)
+          // For this iteration, x = 1
+          // For next iteration, y = 2
+          exprt assignment;
+
+          if(lhs_comp.at(i) == nullptr)
+          {
+            log_status("Null value obtained. At index ");
+            continue;
+          }
+
+          log_status("Before obtaining get_expr for lhs_json");
+          if(get_expr(lhs_comp.at(i), lhs_comp.at(i)["typeDescriptions"], lhs))
+            return true;
+
+          typet t;
+          if(get_type_description(lhs_comp.at(i)["typeDescriptions"], t))
+            return true;
+          log_status("Before obtaining get_expr for rhs_json");
+          if(get_expr(rhs_comp.at(i), rhs_comp.at(i)["typeDescriptions"], rhs))
+            return true;
+
+          // 6. Create an assign exprt to assign lhs and rhs
+          assignment = side_effect_exprt("assign", t);
+          log_status("Dumping rhs for tuple binary op");
+
+          rhs.dump();
+          assignment.copy_to_operands(lhs, rhs);
+          
+
+          // 7. Move to block
+          _block.move_to_operands(assignment);      
+        }
+  }
+
+  // FunctionCall
+  // e.g. (x,y) = tup_return(x,y)
+  // where tup_return(x,y) 
+  // {
+  //    ...
+  //    return (x,y)
+  // }
+  else
+  {
+    nlohmann::json literal_type = lhs_json["typeDescriptions"];
+
+    // 5. Call the function located on the right hand side
+    // Used to create a struct
+    // Used to populate the parameters with arguments
+    exprt function_call;
+    if(get_expr(rhs_json, literal_type, function_call))
+      return true;
+    
+    log_status("function_call is ");
+    function_call.dump();
+    convert_expression_to_code(function_call);
+    _block.move_to_operands(function_call);
+    
+    // Obtain the struct template
+    const nlohmann::json &callee_expr_json = rhs_json["expression"];
+    
+    std::string name_template, id_template;
+    name_template = callee_expr_json["name"].get<std::string>();
+    id_template = prefix + "struct " + current_contractName + "." + name_template;
+    std::cout << "id_template is" << id_template << std::endl;
+    if(context.find_symbol(id_template) == nullptr)
+      assert(!"Unable to find struct template");
+
+    symbolt struct_template_sym = *context.find_symbol(id_template);
+    typet struct_template_type = struct_template_sym.type;
+    exprt struct_template_expr = gen_zero(struct_template_type);
+
+    // Obtain the instantiated struct 
+    std::string name_instance, id_instance, label_instance;
+
+    label_instance = "#" + std::to_string(callee_expr_json["referencedDeclaration"].get<int>());
+    name_instance = callee_expr_json["name"].get<std::string>() + "_instantiation";
+    id_instance = "sol:@C@" + current_contractName + "F@" + name_instance + label_instance;
+    
+    if(context.find_symbol(id_instance) == nullptr)
+      assert(!"Unable to find the instantiated struct");
+
+    symbolt instantiated_struct_sym = *context.find_symbol(id_instance);
+    exprt instantiated_struct_expr = symbol_expr(instantiated_struct_sym);
+    log_status("instantiated_struct_sym");
+    instantiated_struct_expr.dump();
+    
+
+    for(unsigned int i = 0; i < lhs_comp.size(); i++)
+    {
+      // statement is combination of lhs = rhs
+          // e.g. (x,y) = tup_return(x,y)
+          // For this iteration, x = struct_tup_return.a
+          // For next iteration, y = struct_tup_return.b
+      exprt base = 
+        to_struct_type(struct_template_type).components().at(i);
+      std::cout << "In tuple bin operation, at index " << i << std::endl;
+
+      exprt lhs;
+      exprt rhs; 
+      exprt assignment;
+
+      if(lhs_comp.at(i) == nullptr)
+      {
+        std::cout << "Null value obtained. At index " << i << std::endl;
+        continue;
+      }
+
+      if(get_expr(lhs_comp.at(i), lhs_comp.at(i)["typeDescriptions"], lhs))
+            return true;
+
+      typet t;
+      if(get_type_description(lhs_comp.at(i)["typeDescriptions"], t))
+        return true;
+      
+      rhs = member_exprt(instantiated_struct_expr, base.name(), base.type());
+      
+
+      // solidity_gen_typecast(ns, rhs, elem_type);
+      // 9. Create an assign exprt to assign lhs and rhs
+      assignment = side_effect_exprt("assign", t);
+      assignment.copy_to_operands(lhs, rhs);
+      log_status("Dumping rhs for tuple binary op");
+      rhs.dump();
+
+      // 10. Move to block
+      convert_expression_to_code(assignment);   
+      _block.move_to_operands(assignment);
+    }
+
+  }
+
+    locationt location_end;
+    get_final_location_from_stmt(expr, location_end);
+    _block.end_location(location_end);
+
+    new_expr = _block;
+    log_status("new_expr after TupleBinaryOperatorExpr is");
+    new_expr.dump();
 
   return false;
 }
@@ -2937,6 +3357,7 @@ bool solidity_convertert::get_var_decl_ref(
           type)) // "type-name" as in state-variable-declaration
       return true;
 
+    std::cout << "id at get_var_decl_ref is " << id << std::endl;
     new_expr = exprt("symbol", type);
     new_expr.identifier(id);
     new_expr.cmt_lvalue(true);
@@ -2962,6 +3383,7 @@ bool solidity_convertert::get_func_decl_ref(
         decl, type)) // "type-name" as in state-variable-declaration
     return true;
 
+  std::cout << "id at get_func_decl_ref is " << id << std::endl;
   new_expr = exprt("symbol", type);
   new_expr.identifier(id);
   new_expr.cmt_lvalue(true);
@@ -3034,6 +3456,7 @@ bool solidity_convertert::get_decl_ref_builtin(
   type = convert_type;
   type.set("#sol_name", blt_name);
 
+  std::cout << "id at get_decl_ref_builtin is " << id << std::endl;
   new_expr = exprt("symbol", type);
   new_expr.identifier(id);
   new_expr.cmt_lvalue(true);
@@ -3046,10 +3469,9 @@ bool solidity_convertert::get_type_description(
   const nlohmann::json &type_name,
   typet &new_type)
 {
-  // std::cout << "Getting Type Name " << type_name << std::endl;
   // For Solidity rule type-name:DeclRefExprClass
   SolidityGrammar::TypeNameT type = SolidityGrammar::get_type_name_t(type_name);
-
+  std::cout << "type when getting type description is " << type_name_to_str(type) << std::endl;
   switch (type)
   {
   case SolidityGrammar::TypeNameT::ElementaryTypeName:
@@ -3124,7 +3546,8 @@ bool solidity_convertert::get_type_description(
     if (get_type_description(array_elementary_type, the_type))
       return true;
 
-    assert(the_type.is_unsignedbv()); // assuming array size is unsigned bv
+    // Assert unsignedbv. If not unsigned, then it should be of elementary_type BYTES
+    assert(the_type.is_unsignedbv() || the_type.get("#sol_type").as_string().find("BYTES") != std::string::npos); // assuming array size is unsigned bv
     std::string the_size = get_array_size(type_name);
     unsigned z_ext_value = std::stoul(the_size, nullptr);
     new_type = array_typet(
@@ -3332,7 +3755,6 @@ bool solidity_convertert::get_type_description(
   //    - Constant
   //    - Volatile
   //    - isRestrict
-
   return false;
 }
 
@@ -3347,7 +3769,7 @@ bool solidity_convertert::get_func_decl_ref_type(
   // Similar to the function get_type_description()
   SolidityGrammar::FunctionDeclRefT type =
     SolidityGrammar::get_func_decl_ref_t(decl);
-  std::cout << "get_func_decl_ref_type" << std::endl;
+  // std::cout << "get_func_decl_ref_type" << std::endl;
   switch (type)
   {
   case SolidityGrammar::FunctionDeclRefT::FunctionNoProto:
@@ -3661,6 +4083,7 @@ bool solidity_convertert::get_elementary_type_name(
   case SolidityGrammar::ElementaryTypeNameT::BYTES31:
   case SolidityGrammar::ElementaryTypeNameT::BYTES32:
   {
+    log_status("checking bytes");
     if (get_elementary_type_name_bytesn(type, new_type))
       return true;
 
@@ -3695,6 +4118,17 @@ bool solidity_convertert::get_parameter_list(
   const nlohmann::json &type_name,
   typet &new_type)
 {
+  log_status("Getting param_list");
+  // if(context.find_symbol("sol:@C@StructExample@F@main#18") == nullptr)
+  // {
+  //   log_status("Not here");
+  // }
+
+  // else
+  // {
+  //   assert(!"Found StructExample here");
+  // }
+  // std::cout << type_name.dump(4) << std::endl;
   // For Solidity rule parameter-list:
   //  - For non-empty param list, it may need to call get_elementary_type_name, since parameter-list is just a list of types
   std::string c_type;
@@ -3711,18 +4145,27 @@ bool solidity_convertert::get_parameter_list(
     new_type.set("#cpp_type", c_type);
     break;
   }
-  case SolidityGrammar::ParameterListT::NONEMPTY:
+  case SolidityGrammar::ParameterListT::ONE:
   {
     // std::cout << "type name for parameter list is " << type_name.dump(4) << std::endl;
-    assert(
-      type_name["parameters"].size() ==
-      1); // TODO: Fix me! assuming one return parameter
+    assert(type_name["parameters"].size() == 1);
     const nlohmann::json &rtn_type =
       type_name["parameters"].at(0)["typeDescriptions"];
     return get_type_description(rtn_type, new_type);
-
     break;
   }
+
+  case SolidityGrammar::ParameterListT::MORE_THAN_ONE:
+  {
+    // if contains multiple return types
+    // We will return null because we create the symbols of the struct accordingly
+    assert(type_name["parameters"].size() > 1);
+    new_type = empty_typet();
+    c_type = "void";
+    new_type.set("#cpp_type", c_type);
+    break;
+  }
+
   default:
   {
     assert(!"Unimplemented type in rule parameter-list");
@@ -3839,6 +4282,8 @@ void solidity_convertert::get_function_definition_name(
     id = "sol:@C@" + contract_name + "@F@" + name + "#" +
          i2string(ast_node["id"].get<std::int16_t>());
   }
+  std::cout << "name: " << name << std::endl;
+  std::cout << "id: " << id << std::endl;
 }
 
 unsigned int solidity_convertert::add_offset(
@@ -4596,6 +5041,7 @@ bool solidity_convertert::get_implicit_ctor_call(
   const symbolt &s = *context.find_symbol(id);
   typet type = s.type;
 
+  // std::cout << "id at get_implicit_ctor is " << id << std::endl;
   new_expr = exprt("symbol", type);
   new_expr.identifier(id);
   new_expr.cmt_lvalue(true);

@@ -42,8 +42,9 @@ protected:
   // handle the non-contract definition, including struct/enum/error/event/abstract/...
   bool get_noncontract_defition(nlohmann::json &ast_node);
   bool get_struct_class(const nlohmann::json &ast_node);
-  std::tuple<bool, std::string> get_struct_tuple(const nlohmann::json &ast_node);
-  std::tuple<bool, std::string> populate_tuple_array(const nlohmann::json &ast_node);
+  bool get_struct_return_template(const nlohmann::json &ast_node);
+  bool get_struct_return_instantiation(const nlohmann::json &ast_node, exprt &new_expr);
+  std::tuple<bool, std::string> populate_tuple_array(const nlohmann::json &ast_node, exprt &new_expr);
   void check_tuple_components(std::queue<nlohmann::json> queue);
   void add_enum_member_val(nlohmann::json &ast_node);
   bool get_error_definition(const nlohmann::json &ast_node);
@@ -70,6 +71,7 @@ protected:
     const nlohmann::json &expr_common_type,
     exprt &new_expr);
   bool get_binary_operator_expr(const nlohmann::json &expr, exprt &new_expr);
+  bool get_tuple_binary_operator_expr(const nlohmann::json &expr, exprt &new_expr);
   bool get_compound_assign_expr(const nlohmann::json &expr, exprt &new_expr);
   bool get_unary_operator_expr(
     const nlohmann::json &expr,
@@ -212,6 +214,7 @@ protected:
   // e.g (x,y)
   // jsonTupleComponents.pop() = exprt of x
   std::queue<nlohmann::json> jsonTupleComponents;
+ 
 
   // Auxiliary data structures:
   // Mapping from the Contract_id to the Contract_Name
