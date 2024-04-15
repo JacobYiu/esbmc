@@ -116,6 +116,7 @@ bool clang_c_convertert::get_decl(const clang::Decl &decl, exprt &new_expr)
 
   // Declaration of variables
   case clang::Decl::Var:
+  case clang::Decl::VarTemplateSpecialization:
   {
     const clang::VarDecl &vd = static_cast<const clang::VarDecl &>(decl);
     return get_var(vd, new_expr);
@@ -349,8 +350,7 @@ bool clang_c_convertert::get_struct_union_class(const clang::RecordDecl &rd)
    * b) the type is being referred to under a pointer inside another type
    *    definition and up to this definition has not been defined, yet.
    */
-  clang::RecordDecl *rd_def = rd.getDefinition();
-  if (!rd_def)
+  if (!rd.isCompleteDefinition())
     return false;
 
   /* Don't continue if it's not incomplete; use the .incomplete() flag to avoid
@@ -360,6 +360,9 @@ bool clang_c_convertert::get_struct_union_class(const clang::RecordDecl &rd)
   if (!sym->type.incomplete())
     return false;
   sym->type.remove(irept::a_incomplete);
+
+  clang::RecordDecl *rd_def = rd.getDefinition();
+  assert(rd_def);
 
   /* it has a definition, now build the complete type */
   struct_union_typet t(c_tag);
@@ -512,11 +515,9 @@ bool clang_c_convertert::get_var(const clang::VarDecl &vd, exprt &new_expr)
   symbol.file_local = (vd.getStorageClass() == clang::SC_Static) ||
                       (!vd.isExternallyVisible() && !vd.hasGlobalStorage());
 
-  bool aggregate_value_init = is_aggregate_type(vd.getType());
-
   if (
     symbol.static_lifetime && !symbol.is_extern &&
-    (!vd.hasInit() || aggregate_value_init))
+    (!vd.hasInit() || is_aggregate_type(vd.getType())))
   {
     // the type might contains symbolic types,
     // replace them with complete types before generating zero initialization
@@ -570,7 +571,7 @@ bool clang_c_convertert::get_var(const clang::VarDecl &vd, exprt &new_expr)
       return true;
 
     bool aggregate_without_init =
-      aggregate_value_init &&
+      is_aggregate_type(vd.getType()) &&
       stmt->getStmtClass() == clang::Stmt::CXXConstructExprClass;
 
     added_symbol = context.move_symbol_to_context(symbol);
@@ -1054,10 +1055,13 @@ bool clang_c_convertert::get_type(const clang::Type &the_type, typet &new_type)
 
     std::string id, name;
     get_decl_name(rd, name, id);
-
-    /* record in context if not already there */
-    if (get_struct_union_class(rd))
-      return true;
+    symbolt *s = context.find_symbol(id);
+    if (!s)
+    {
+      /* record in context if not already there */
+      if (get_struct_union_class(rd))
+        return true;
+    }
 
     /* symbolic type referring to that type */
     new_type = symbol_typet(id);
@@ -1067,7 +1071,13 @@ bool clang_c_convertert::get_type(const clang::Type &the_type, typet &new_type)
 
   case clang::Type::Enum:
   {
-    new_type = enum_type();
+    const clang::EnumType &ent = static_cast<const clang::EnumType &>(the_type);
+
+    clang::QualType q_type = ent.getDecl()->getIntegerType();
+
+    if (get_type(q_type, new_type))
+      return true;
+
     break;
   }
 
@@ -1397,6 +1407,11 @@ bool clang_c_convertert::get_builtin_type(
     c_type = "__uint128";
     break;
 
+  case clang::BuiltinType::NullPtr:
+    new_type = pointer_type();
+    c_type = "uintptr_t";
+    break;
+
 #ifdef ESBMC_CHERI_CLANG
   case clang::BuiltinType::IntCap:
     new_type = intcap_typet();
@@ -1689,7 +1704,9 @@ bool clang_c_convertert::get_expr(const clang::Stmt &stmt, exprt &new_expr)
       const auto *e =
         llvm::dyn_cast<clang::EnumConstantDecl>(member.getMemberDecl()))
     {
-      get_enum_value(e, new_expr);
+      if (get_enum_value(e, new_expr))
+        return true;
+
       break;
     }
 
@@ -1822,10 +1839,10 @@ bool clang_c_convertert::get_expr(const clang::Stmt &stmt, exprt &new_expr)
     break;
   }
 
+  case clang::Stmt::CXXNullPtrLiteralExprClass:
   case clang::Stmt::GNUNullExprClass:
   {
-    const clang::GNUNullExpr &gnun =
-      static_cast<const clang::GNUNullExpr &>(stmt);
+    const clang::Expr &gnun = static_cast<const clang::Expr &>(stmt);
 
     typet t;
     if (get_type(gnun.getType(), t))
@@ -2045,6 +2062,21 @@ bool clang_c_convertert::get_expr(const clang::Stmt &stmt, exprt &new_expr)
           to_union_expr(inits).set_component_name(
             init_union_field->getName().str());
       }
+    }
+    else if (
+      init_stmt.getNumInits() == 0 && init_stmt.getType()->isScalarType())
+    {
+      /* We have a list initializer with no elements.
+       * So per https://en.cppreference.com/w/cpp/language/list_initialization
+       * we perform value-initialization.
+       * > Otherwise, if the braced-init-list has no elements, T is value-initialized.
+       * And per https://en.cppreference.com/w/cpp/language/value_initialization
+       * > The effects of value-initialization are:
+       * > ...
+       * > - Otherwise, the object is zero-initialized.
+       * So we just zero-initialize the object.
+       */
+      inits = gen_zero(t);
     }
     else
     {
@@ -2648,16 +2680,25 @@ bool clang_c_convertert::get_expr(const clang::Stmt &stmt, exprt &new_expr)
   return false;
 }
 
-void clang_c_convertert::get_enum_value(
+bool clang_c_convertert::get_enum_value(
   const clang::EnumConstantDecl *e,
   exprt &new_expr)
 {
   assert(e);
-  // For enum constants, we get their value directly
-  new_expr = constant_exprt(
-    integer2binary(e->getInitVal().getSExtValue(), bv_width(int_type())),
-    integer2string(e->getInitVal().getSExtValue()),
-    int_type());
+
+  if (!e->getInitExpr())
+  {
+    new_expr = constant_exprt(
+      integer2binary(e->getInitVal().getSExtValue(), bv_width(int_type())),
+      integer2string(e->getInitVal().getSExtValue()),
+      int_type());
+    return false;
+  }
+
+  if (get_expr(*e->getInitExpr(), new_expr))
+    return true;
+
+  return false;
 }
 
 bool clang_c_convertert::get_decl_ref(const clang::Decl &d, exprt &new_expr)
@@ -2666,7 +2707,9 @@ bool clang_c_convertert::get_decl_ref(const clang::Decl &d, exprt &new_expr)
   // to the name
   if (const auto *e = llvm::dyn_cast<clang::EnumConstantDecl>(&d))
   {
-    get_enum_value(e, new_expr);
+    if (get_enum_value(e, new_expr))
+      return true;
+
     return false;
   }
 
@@ -3421,7 +3464,6 @@ void clang_c_convertert::get_decl_name(
       return;
     }
     break;
-
   default:
     if (name.empty())
     {

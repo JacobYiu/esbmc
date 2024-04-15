@@ -118,6 +118,16 @@ bool clang_cpp_convertert::get_decl(const clang::Decl &decl, exprt &new_expr)
     break;
   }
 
+  case clang::Decl::VarTemplate:
+  {
+    const clang::VarTemplateDecl &vd =
+      static_cast<const clang::VarTemplateDecl &>(decl);
+
+    if (get_template_decl(&vd, false, new_expr))
+      return true;
+    break;
+  }
+
   case clang::Decl::Friend:
   {
     const clang::FriendDecl &fd = static_cast<const clang::FriendDecl &>(decl);
@@ -130,6 +140,7 @@ bool clang_cpp_convertert::get_decl(const clang::Decl &decl, exprt &new_expr)
 
   // We can ignore any these declarations
   case clang::Decl::ClassTemplatePartialSpecialization:
+  case clang::Decl::VarTemplatePartialSpecialization:
   case clang::Decl::Using:
   case clang::Decl::UsingShadow:
   case clang::Decl::UsingDirective:
@@ -148,6 +159,58 @@ bool clang_cpp_convertert::get_decl(const clang::Decl &decl, exprt &new_expr)
   return false;
 }
 
+void clang_cpp_convertert::get_decl_name(
+  const clang::NamedDecl &nd,
+  std::string &name,
+  std::string &id)
+{
+  id = name = clang_c_convertert::get_decl_name(nd);
+
+  switch (nd.getKind())
+  {
+  case clang::Decl::CXXConstructor:
+    if (name.empty())
+    {
+      // Anonymous constructor, generate a name based on the type
+      const clang::CXXConstructorDecl &cd =
+        static_cast<const clang::CXXConstructorDecl &>(nd);
+
+      locationt location_begin;
+      get_location_from_decl(cd, location_begin);
+      std::string location_begin_str = location_begin.file().as_string() + "_" +
+                                       location_begin.function().as_string() +
+                                       "_" + location_begin.line().as_string() +
+                                       "_" +
+                                       location_begin.column().as_string();
+      name = "__anon_constructor_at_" + location_begin_str;
+      std::replace(name.begin(), name.end(), '.', '_');
+
+      // "id" will be derived from USR so break instead of return here
+      break;
+    }
+    break;
+
+  default:
+    clang_c_convertert::get_decl_name(nd, name, id);
+    return;
+  }
+
+  clang::SmallString<128> DeclUSR;
+  if (!clang::index::generateUSRForDecl(&nd, DeclUSR))
+  {
+    id = DeclUSR.str().str();
+    return;
+  }
+
+  // Otherwise, abort
+  std::ostringstream oss;
+  llvm::raw_os_ostream ross(oss);
+  ross << "Unable to generate the USR for:\n";
+  nd.dump(ross);
+  ross.flush();
+  log_error("{}", oss.str());
+  abort();
+}
 bool clang_cpp_convertert::get_type(
   const clang::QualType &q_type,
   typet &new_type)
@@ -826,8 +889,27 @@ bool clang_cpp_convertert::get_constructor_call(
    */
 
   // Calling base constructor from derived constructor
+  bool need_new_obj = false;
+
   if (new_expr.base_ctor_derived())
     gen_typecast_base_ctor_call(callee_decl, call, new_expr);
+  else if (new_expr.get_bool("#member_init"))
+  {
+    /*
+    struct A {A(int _a){}}; struct B {A a; B(int _a) : a(_a) {}};
+    In this case, use members to construct the object directly
+    */
+  }
+  else if (new_expr.get_bool("#delegating_ctor"))
+  {
+    // get symbol for this
+    symbolt *s = context.find_symbol(new_expr.get("#delegating_ctor_this"));
+    const symbolt &this_symbol = *s;
+    assert(s);
+    exprt implicit_this_symb = symbol_expr(this_symbol);
+
+    call.arguments().push_back(implicit_this_symb);
+  }
   else
   {
     exprt this_object = exprt("new_object");
@@ -837,6 +919,8 @@ bool clang_cpp_convertert::get_constructor_call(
     /* first parameter is address to the object to be constructed */
     address_of_exprt tmp_expr(this_object);
     call.arguments().push_back(tmp_expr);
+
+    need_new_obj = true;
   }
 
   // Do args
@@ -851,7 +935,7 @@ bool clang_cpp_convertert::get_constructor_call(
 
   call.set("constructor", 1);
 
-  if (!new_expr.base_ctor_derived())
+  if (need_new_obj)
     make_temporary(call);
 
   new_expr.swap(call);
@@ -925,11 +1009,31 @@ bool clang_cpp_convertert::get_function_body(
 
         if (!init->isBaseInitializer())
         {
-          exprt lhs;
           if (init->isMemberInitializer())
           {
+            exprt lhs;
             // parsing non-static member initializer
             if (get_decl_ref(*init->getMember(), lhs))
+              return true;
+
+            build_member_from_component(
+              fd, lhs.id() == "dereference" ? lhs.op0() : lhs);
+
+            exprt rhs;
+            rhs.set("#member_init", 1);
+            if (get_expr(*init->getInit(), rhs))
+              return true;
+
+            initializer = side_effect_exprt("assign", lhs.type());
+            initializer.copy_to_operands(lhs, rhs);
+          }
+          else if (init->isDelegatingInitializer())
+          {
+            initializer.set(
+              "#delegating_ctor_this",
+              ftype.arguments().at(0).get("#identifier"));
+            initializer.set("#delegating_ctor", 1);
+            if (get_expr(*init->getInit(), initializer))
               return true;
           }
           else
@@ -937,16 +1041,6 @@ bool clang_cpp_convertert::get_function_body(
             log_error("Unsupported initializer in {}", __func__);
             abort();
           }
-
-          build_member_from_component(
-            fd, lhs.id() == "dereference" ? lhs.op0() : lhs);
-
-          exprt rhs;
-          if (get_expr(*init->getInit(), rhs))
-            return true;
-
-          initializer = side_effect_exprt("assign", lhs.type());
-          initializer.copy_to_operands(lhs, rhs);
         }
         else
         {
@@ -1184,7 +1278,7 @@ bool clang_cpp_convertert::get_decl_ref(
     if (id.empty() && name.empty())
       name_param_and_continue(*param, id, name, new_expr);
 
-    if (is_reference(new_expr.type()) || is_rvalue_reference(new_expr.type()))
+    if (is_lvalue_or_rvalue_reference(new_expr.type()))
     {
       new_expr = dereference_exprt(new_expr, new_expr.type());
       new_expr.set("#lvalue", true);
@@ -1225,7 +1319,7 @@ bool clang_cpp_convertert::get_decl_ref(
     if (clang_c_convertert::get_decl_ref(decl, new_expr))
       return true;
 
-    if (is_reference(new_expr.type()) || is_rvalue_reference(new_expr.type()))
+    if (is_lvalue_or_rvalue_reference(new_expr.type()))
     {
       new_expr = dereference_exprt(new_expr, new_expr.type());
       new_expr.set("#lvalue", true);
@@ -1350,7 +1444,7 @@ bool clang_cpp_convertert::annotate_class_method(
 
   // annotate name
   std::string method_id, method_name;
-  clang_c_convertert::get_decl_name(cxxmdd, method_name, method_id);
+  get_decl_name(cxxmdd, method_name, method_id);
   new_expr.name(method_id);
 
   // annotate access
@@ -1473,7 +1567,7 @@ bool clang_cpp_convertert::get_base_map(
 
     // get base class id
     std::string class_id, class_name;
-    clang_c_convertert::get_decl_name(base_cxxrd, class_name, class_id);
+    get_decl_name(base_cxxrd, class_name, class_id);
 
     // avoid adding the same base, e.g. in case of diamond problem
     if (map.find(class_id) != map.end())
@@ -1555,8 +1649,8 @@ void clang_cpp_convertert::annotate_cpyctor(
   const clang::CXXMethodDecl &cxxmdd,
   typet &rtn_type)
 {
-  if (is_defaulted_ctor(cxxmdd) && is_cpyctor(cxxmdd))
-    rtn_type.set("#default_copy_cons", true);
+  if (is_cpyctor(cxxmdd))
+    rtn_type.set("#copy_cons", true);
 }
 
 bool clang_cpp_convertert::is_cpyctor(const clang::DeclContext &dcxt)
