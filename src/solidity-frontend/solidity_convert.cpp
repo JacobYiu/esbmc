@@ -717,6 +717,7 @@ bool solidity_convertert::get_struct_return_instantiation(
   symbol.is_extern = false;
 
   new_expr = symbol_expr(added_symbol);
+  log_status("new Instantiated baby");
   new_expr.dump();
 
   return false;
@@ -2230,6 +2231,8 @@ bool solidity_convertert::get_expr(
       }
 
       new_expr = call;
+      log_status("Dumping call expr");
+      new_expr.dump();
       break;
     }
 
@@ -3049,25 +3052,64 @@ bool solidity_convertert::get_tuple_binary_operator_expr(
     
     // Obtain the struct template
     const nlohmann::json &callee_expr_json = rhs_json["expression"];
-    
+
+    // variables used for template
     std::string name_template, id_template;
-    name_template = callee_expr_json["name"].get<std::string>();
-    id_template = prefix + "struct " + current_contractName + "." + name_template;
-    std::cout << "id_template is" << id_template << std::endl;
+    // variables used for instantiation
+    std::string name_instance, id_instance, label_instance;
+    std::cout << "callee_expr_json is " << callee_expr_json.dump(4) << std::endl;
+    context.dump();
+    // Function call within the contract
+    if(callee_expr_json.contains("name"))
+    {
+      // Preprocessing for the template
+      name_template = callee_expr_json["name"].get<std::string>();
+      id_template = prefix + "struct " + current_contractName + "." + name_template;
+
+      // Preprocessing for the instantiated struct 
+      label_instance = "#" + std::to_string(callee_expr_json["referencedDeclaration"].get<int>());
+      name_instance = callee_expr_json["name"].get<std::string>() + "_instantiation";
+      id_instance = "sol:@C@" + current_contractName + "F@" + name_instance + label_instance;   
+    }
+
+    // Function Call from another contract(external)
+    else if(callee_expr_json.contains("memberName"))
+    {
+      // Preprocessing for the template
+      name_template = callee_expr_json["memberName"].get<std::string>();
+      const int contract_func_id =
+      callee_expr_json["referencedDeclaration"].get<int>();
+      const nlohmann::json external_func_call_json = find_decl_ref(contract_func_id);
+      if (external_func_call_json == empty_json)
+        assert(!"External Function not found");
+
+      std::string ref_contract_name;
+      if (get_current_contract_name(external_func_call_json, ref_contract_name))
+        return true;
+      id_template = prefix + "struct " + ref_contract_name + "." + name_template;
+
+      // Preprocessing for the instantiated struct 
+      label_instance = "#" + std::to_string(callee_expr_json["referencedDeclaration"].get<int>());
+      name_instance = callee_expr_json["memberName"].get<std::string>() + "_instantiation";
+      id_instance = "sol:@C@" + ref_contract_name + "F@" + name_instance + label_instance;
+    }
+
+    else
+    {
+      assert(!"Not a function call from either internal contract or external contract. Revise ");
+    }
+
+    std::cout << "id_template is " << id_template << std::endl;
     if(context.find_symbol(id_template) == nullptr)
       assert(!"Unable to find struct template");
 
+    // Find template
     symbolt struct_template_sym = *context.find_symbol(id_template);
     typet struct_template_type = struct_template_sym.type;
     exprt struct_template_expr = gen_zero(struct_template_type);
+    // context.dump();
 
-    // Obtain the instantiated struct 
-    std::string name_instance, id_instance, label_instance;
-
-    label_instance = "#" + std::to_string(callee_expr_json["referencedDeclaration"].get<int>());
-    name_instance = callee_expr_json["name"].get<std::string>() + "_instantiation";
-    id_instance = "sol:@C@" + current_contractName + "F@" + name_instance + label_instance;
-    
+    // Find instantiation
     if(context.find_symbol(id_instance) == nullptr)
       assert(!"Unable to find the instantiated struct");
 
@@ -3118,6 +3160,8 @@ bool solidity_convertert::get_tuple_binary_operator_expr(
       convert_expression_to_code(assignment);   
       _block.move_to_operands(assignment);
     }
+
+    //Contract Call
 
   }
 
@@ -4177,19 +4221,6 @@ bool solidity_convertert::get_parameter_list(
   const nlohmann::json &type_name,
   typet &new_type)
 {
-  log_status("Getting param_list");
-  // if(context.find_symbol("sol:@C@StructExample@F@main#18") == nullptr)
-  // {
-  //   log_status("Not here");
-  // }
-
-  // else
-  // {
-  //   assert(!"Found StructExample here");
-  // }
-  // std::cout << type_name.dump(4) << std::endl;
-  // For Solidity rule parameter-list:
-  //  - For non-empty param list, it may need to call get_elementary_type_name, since parameter-list is just a list of types
   std::string c_type;
   SolidityGrammar::ParameterListT type =
     SolidityGrammar::get_parameter_list_t(type_name);

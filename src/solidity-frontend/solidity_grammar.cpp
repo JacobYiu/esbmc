@@ -674,7 +674,7 @@ const char *statement_to_str(StatementT type)
 // rule expression
 ExpressionT get_expression_t(const nlohmann::json &expr)
 {
-  std::cout << "expr nodeType is " << expr.dump(4) << std::endl;
+  std::cout << "expr nodeType for get_expr_t is " << expr["nodeType"].dump(4) << std::endl;
   if (expr["nodeType"] == "Assignment" || expr["nodeType"] == "BinaryOperation")
   {
     if(expr.contains("typeDescriptions") && expr["typeDescriptions"]["typeIdentifier"] == "t_tuple$__$")
