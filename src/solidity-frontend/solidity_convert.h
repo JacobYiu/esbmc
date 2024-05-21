@@ -103,6 +103,16 @@ protected:
     const nlohmann::json &ast_node,
     std::string &contract_name);
   bool get_empty_array_ref(const nlohmann::json &ast_node, exprt &new_expr);
+  bool get_tuple_definition(const nlohmann::json &ast_node);
+  bool get_tuple_instance(const nlohmann::json &ast_node, exprt &new_expr);
+  void get_tuple_name(
+    const nlohmann::json &ast_node,
+    std::string &name,
+    std::string &id);
+  bool get_tuple_instance_name(
+    const nlohmann::json &ast_node,
+    std::string &name,
+    std::string &id);
 
   // line number and locations
   void

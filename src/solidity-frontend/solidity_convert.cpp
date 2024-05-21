@@ -425,6 +425,7 @@ bool solidity_convertert::get_var_decl(
     (ast_node.contains("value") || ast_node.contains("initialValue"));
   if (symbol.static_lifetime && !symbol.is_extern && !has_init)
   {
+    // set default value as zero
     symbol.value = gen_zero(t, true);
     symbol.value.zero_initializer(true);
   }
@@ -1673,8 +1674,77 @@ bool solidity_convertert::get_expr(
     // case 3
     case SolidityGrammar::TypeNameT::TupleTypeName: // case 3
     {
-      log_error("Currently we do not handle tuple.");
-      abort();
+      /*
+      we assume there are three types of tuple expr:
+      0. dump: (x,y);
+      1. fixed: (x,y) = (y,x);
+      2. function-related: 
+          2.1. (x,y) = func();
+          2.2. return (x,y);
+
+      case 0:
+        1. create a struct type
+        2. create a struct type instance
+        3. new_expr = instance
+        e.g.
+        (x , y) ==>
+        struct Tuple
+        {
+          uint x,
+          uint y
+        };
+        Tuple tuple;
+
+      case 1:
+        1. add special handling in binary operation.
+           when matching struct_expr A = struct_expr B,
+           divided into A.operands()[i] = B.operands()[i]
+           and populated into a code_block.
+        2. new_expr = code_block
+        e.g.
+        (x, y) = (1, 2) ==>
+        {
+          tuple.x = 1;
+          tuple.y = 2;
+        }
+        ? any potential scope issue?
+
+      case 2:
+        1. when parsing the funciton definition, if the returnParam > 1
+           make the function return void instead, and create a struct type
+        2. when parsing the return statement, if the return value is a tuple,
+           create a struct type instance, do assignments,  and return empty;
+        3. when the lhs is tuple and rhs is func_call, get_tuple_instance_expr based 
+           on the func_call, and do case 1.
+        e.g.
+        function test() returns (uint, uint)
+        {
+          return (1,2);
+        }
+        ==>
+        struct Tuple
+        {
+          uint x;
+          uint y;
+        }
+        function test()
+        {
+          Tuple tuple;
+          tuple.x = 1;
+          tuple.y = 2;
+          return;
+        }
+      */
+
+      // 1. construct struct type
+      if (get_tuple_definition(expr))
+        return true;
+
+      //2. construct struct_type instance
+      if (get_tuple_instance(expr, new_expr))
+        return true;
+
+      break;
     }
 
     // case 2
@@ -2189,6 +2259,13 @@ bool solidity_convertert::get_expr(
     new_expr = from_expr;
     break;
   }
+  case SolidityGrammar::ExpressionT::NullExpr:
+  {
+    // e.g. (, x) = (1, 2);
+    // the first component in lhs is nil
+    new_expr = nil_exprt();
+    break;
+  }
   default:
   {
     assert(!"Unimplemented type in rule expression");
@@ -2310,6 +2387,50 @@ bool solidity_convertert::get_binary_operator_expr(
   {
   case SolidityGrammar::ExpressionT::BO_Assign:
   {
+    // special handle for tuple-type assignment;
+    typet lt = lhs.type();
+    typet rt = rhs.type();
+    if (lt.get("sol_type") == "tuple_instance")
+    {
+      if (rt.get("sol_type") == "tuple_instance")
+      {
+        // e.g. (x,y) = (1,2); (x,y) = (func(),x);
+        // convert it to a block and #sol_type = tuple
+        code_blockt _block;
+
+        assert(lhs.operands().size() == rhs.operands().size());
+        //constuct assignment
+        for (unsigned int i = 0; i < lhs.operands().size(); i++)
+        {
+          if (lhs.operands().at(i).is_nil())
+            continue;
+
+          exprt lcomp = lhs.operands().at(i);
+          exprt rcomp = rhs.operands().at(i);
+
+          // common type
+
+          exprt tmp = side_effect_exprt("assign", t);
+          tmp.copy_to_operands(lcomp, rcomp);
+
+          convert_expression_to_code(tmp);
+          _block.move_to_operands(tmp);
+        }
+
+        new_expr = _block;
+
+        // Pop current_BinOp_type.push as we've finished this conversion
+        current_BinOp_type.pop();
+        return false;
+      }
+      else
+      {
+        // e.g. (x,y) = func();
+
+        abort();
+      }
+    }
+
     new_expr = side_effect_exprt("assign", t);
     break;
   }
@@ -3432,6 +3553,163 @@ bool solidity_convertert::get_array_to_pointer_type(
   return false;
 }
 
+bool solidity_convertert::get_tuple_definition(const nlohmann::json &ast_node)
+{
+  exprt tuple_expr;
+  struct_typet t = struct_typet();
+
+  // get name/id:
+  std::string name, id;
+  get_tuple_name(ast_node, name, id);
+  tuple_expr.name(name);
+  tuple_expr.id(id);
+
+  // get type:
+  t.tag("struct " + name);
+  tuple_expr.type() = t;
+  // add label
+  t.set("#sol_type", "tuple");
+
+  // get location
+  locationt location_begin;
+  get_location_from_decl(ast_node, location_begin);
+
+  // get debug module name
+  std::string debug_modulename =
+    get_modulename_from_path(location_begin.file().as_string());
+  current_fileName = debug_modulename;
+
+  // populate struct type symbol
+  symbolt symbol;
+  get_default_symbol(symbol, debug_modulename, t, name, id, location_begin);
+  symbolt &added_symbol = *move_symbol_to_context(symbol);
+
+  // populate params
+  unsigned int counter = 0;
+  for (const auto &arg : ast_node["components"].items())
+  {
+    // manually create a member_name
+    // follow the naming rule defined in get_var_decl_name
+    const std::string mem_name = "mem#" + std::to_string(counter);
+    const std::string mem_id = "sol:@" + name + "@" + mem_name + "#" +
+                               i2string(ast_node["id"].get<std::int16_t>());
+
+    // get type
+    typet mem_type;
+    if (get_type_description(arg.value()["typeDescriptions"], mem_type))
+      return true;
+
+    // construct comp
+    struct_typet::componentt comp;
+    comp.type() = mem_type;
+    comp.type().set("#member_name", t.name());
+    comp.identifier(mem_id);
+    comp.cmt_lvalue(true);
+    comp.name(mem_name);
+    comp.pretty_name(mem_name);
+
+    // update struct type component
+    t.components().push_back(comp);
+
+    // update cnt
+    ++counter;
+  }
+
+  t.location() = location_begin;
+  added_symbol.type = t;
+
+  return false;
+}
+
+bool solidity_convertert::get_tuple_instance(
+  const nlohmann::json &ast_node,
+  exprt &new_expr)
+{
+  std::string name, id;
+  get_tuple_name(ast_node, name, id);
+
+  if (context.find_symbol(id) == nullptr)
+    return true;
+  const symbolt &sym = *context.find_symbol(id);
+
+  // get type
+  typet t = sym.type;
+  t.set("sol_type", "tuple_instance");
+  assert(t.id() == typet::id_struct);
+
+  // get instance name,id
+  if (get_tuple_instance_name(ast_node, name, id))
+    return true;
+
+  // get location
+  locationt location_begin;
+  get_location_from_decl(ast_node, location_begin);
+
+  // get debug module name
+  std::string debug_modulename =
+    get_modulename_from_path(location_begin.file().as_string());
+  current_fileName = debug_modulename;
+
+  // populate struct type symbol
+  symbolt symbol;
+  get_default_symbol(symbol, debug_modulename, t, name, id, location_begin);
+  symbolt &added_symbol = *move_symbol_to_context(symbol);
+
+  // populate initial val
+  // e.g. (1,2) ==> Tuple tuple = Tuple(1,2);
+  //! since there is no tuple type variable in solidity
+  // we can just convert it as inital value instead of assignment
+  //? should we set the default value as zero?
+
+  exprt inits = gen_zero(t);
+  assert(ast_node["components"].size() == inits.operands().size());
+  auto &args = ast_node["components"];
+  for (unsigned int i = 0; i < inits.operands().size() && i < args.size(); i++)
+  {
+    exprt init;
+    if (get_expr(args.at(i), args.at(i)["typeDescriptions"], init))
+      return true;
+
+    const struct_union_typet::componentt *c =
+      &to_struct_type(t).components().at(i);
+    typet elem_type = c->type();
+
+    solidity_gen_typecast(ns, init, elem_type);
+    inits.operands().at(i) = init;
+  }
+
+  added_symbol.value = inits;
+  code_declt decl(symbol_expr(added_symbol));
+  new_expr = decl;
+
+  return false;
+}
+
+void solidity_convertert::get_tuple_name(
+  const nlohmann::json &ast_node,
+  std::string &name,
+  std::string &id)
+{
+  std::string c_name;
+  name = "tuple#" + std::to_string(ast_node["id"].get<int>());
+  id = prefix + "struct " + name;
+}
+
+bool solidity_convertert::get_tuple_instance_name(
+  const nlohmann::json &ast_node,
+  std::string &name,
+  std::string &id)
+{
+  std::string c_name;
+  if (get_current_contract_name(ast_node, c_name))
+    return true;
+  if (c_name.empty())
+    return true;
+  name = "tuple_instance#" + std::to_string(ast_node["id"].get<int>());
+  id = "sol:@C" + c_name + "@" + name;
+  return false;
+}
+
 /**
      * @brief Populate the out `typet` parameter with the uint type specified by type parameter
      *
@@ -3696,7 +3974,7 @@ bool solidity_convertert::get_parameter_list(
     new_type.set("#cpp_type", c_type);
     break;
   }
-  case SolidityGrammar::ParameterListT::NONEMPTY:
+  case SolidityGrammar::ParameterListT::ONE_PARAM:
   {
     assert(
       type_name["parameters"].size() ==
@@ -3705,6 +3983,16 @@ bool solidity_convertert::get_parameter_list(
       type_name["parameters"].at(0)["typeDescriptions"];
     return get_type_description(rtn_type, new_type);
 
+    break;
+  }
+  case SolidityGrammar::ParameterListT::MORE_THAN_ONE_PARAM:
+  {
+    // if contains multiple return types
+    // We will return null because we create the symbols of the struct accordingly
+    assert(type_name["parameters"].size() > 1);
+    new_type = empty_typet();
+    c_type = "void";
+    new_type.set("#cpp_type", c_type);
     break;
   }
   default:
