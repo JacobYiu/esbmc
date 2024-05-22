@@ -619,7 +619,7 @@ bool solidity_convertert::get_struct_class_fields(
     return true;
 
   comp.id("component");
-  comp.type().set("#member_name", type.name());
+  comp.type().set("#member_name", type.tag());
 
   if (get_access_from_decl(ast_node, comp))
     return true;
@@ -2390,31 +2390,81 @@ bool solidity_convertert::get_binary_operator_expr(
     // special handle for tuple-type assignment;
     typet lt = lhs.type();
     typet rt = rhs.type();
-    if (lt.get("sol_type") == "tuple_instance")
+    if (lt.get("#sol_type") == "tuple_instance")
     {
-      if (rt.get("sol_type") == "tuple_instance")
+      if (rt.get("#sol_type") == "tuple_instance")
       {
         // e.g. (x,y) = (1,2); (x,y) = (func(),x);
         // convert it to a block and #sol_type = tuple
         code_blockt _block;
 
-        assert(lhs.operands().size() == rhs.operands().size());
+        unsigned int i = 0;
+        unsigned int j = 0;
+        unsigned int ls = to_struct_type(lhs.type()).components().size();
+        unsigned int rs = to_struct_type(rhs.type()).components().size();
+        assert(ls <= rs);
+
         //constuct assignment
-        for (unsigned int i = 0; i < lhs.operands().size(); i++)
+        while (i < ls && j < rs)
         {
-          if (lhs.operands().at(i).is_nil())
+          /*
+          lhs/rhs template:
+          struct
+            * type: struct
+                * tag: struct tuple17
+                * components:
+                  0: component
+                      * type: unsignedbv
+                          * width: 256
+                          * #member_name: struct tuple17
+                      * name: mem0
+                      * identifier: sol:@C@Base@tuple17@mem0#17
+                      * access: internal
+                      * pretty_name: mem0
+                      * #lvalue: 1
+                * #location:
+                  * file: example.sol
+                  * line: 12
+                * #sol_type: tuple_instance
+            * operands:
+              0: symbol
+                  * type: unsignedbv
+                      * width: 256
+                  * name: y
+                  * identifier: sol:@C@Base@y#10
+                  * #location:
+                    * file: example.sol
+                    * line: 12
+                    * function: Base
+          */
+
+          // construct assignemnt
+          exprt lcomp = to_struct_type(lhs.type()).components().at(i);
+          exprt rcomp = to_struct_type(rhs.type()).components().at(j);
+          exprt lop = lhs.operands().at(i);
+          exprt rop = rhs.operands().at(j);
+
+          log_status("j{}", std::to_string(j));
+          log_status("rop{}", rop);
+          log_status("lname{}", lcomp.name());
+          log_status("rname{}", rcomp.name());
+
+          if (lcomp.name() != rcomp.name())
+          {
+            // e.g. (, x) = (1, 2)
+            //        null <=> tuple2.mem0
+            // tuple1.mem1 <=> tuple2.mem1
+            ++j;
             continue;
-
-          exprt lcomp = lhs.operands().at(i);
-          exprt rcomp = rhs.operands().at(i);
-
-          // common type
-
-          exprt tmp = side_effect_exprt("assign", t);
-          tmp.copy_to_operands(lcomp, rcomp);
-
+          }
+          exprt tmp = side_effect_exprt("assign", lop.type());
+          tmp.copy_to_operands(lop, rop);
           convert_expression_to_code(tmp);
           _block.move_to_operands(tmp);
+
+          // update counter
+          ++i;
+          ++j;
         }
 
         new_expr = _block;
@@ -3421,6 +3471,13 @@ bool solidity_convertert::get_type_description(
     abort();
     break;
   }
+  case SolidityGrammar::TypeNameT::TupleTypeName:
+  {
+    // do nothing as it won't be used
+    new_type = empty_typet();
+    new_type.set("#cpp_type", "void");
+    break;
+  }
   default:
   {
     log_debug(
@@ -3555,18 +3612,14 @@ bool solidity_convertert::get_array_to_pointer_type(
 
 bool solidity_convertert::get_tuple_definition(const nlohmann::json &ast_node)
 {
-  exprt tuple_expr;
   struct_typet t = struct_typet();
 
   // get name/id:
   std::string name, id;
   get_tuple_name(ast_node, name, id);
-  tuple_expr.name(name);
-  tuple_expr.id(id);
 
   // get type:
   t.tag("struct " + name);
-  tuple_expr.type() = t;
   // add label
   t.set("#sol_type", "tuple");
 
@@ -3588,10 +3641,20 @@ bool solidity_convertert::get_tuple_definition(const nlohmann::json &ast_node)
   unsigned int counter = 0;
   for (const auto &arg : ast_node["components"].items())
   {
+    if (arg.value().is_null())
+    {
+      ++counter;
+      continue;
+    }
+
+    struct_typet::componentt comp;
+
     // manually create a member_name
     // follow the naming rule defined in get_var_decl_name
-    const std::string mem_name = "mem#" + std::to_string(counter);
-    const std::string mem_id = "sol:@" + name + "@" + mem_name + "#" +
+    assert(!current_contractName.empty());
+    const std::string mem_name = "mem" + std::to_string(counter);
+    const std::string mem_id = "sol:@C@" + current_contractName + "@" + name +
+                               "@" + mem_name + "#" +
                                i2string(ast_node["id"].get<std::int16_t>());
 
     // get type
@@ -3600,13 +3663,13 @@ bool solidity_convertert::get_tuple_definition(const nlohmann::json &ast_node)
       return true;
 
     // construct comp
-    struct_typet::componentt comp;
     comp.type() = mem_type;
-    comp.type().set("#member_name", t.name());
+    comp.type().set("#member_name", t.tag());
     comp.identifier(mem_id);
     comp.cmt_lvalue(true);
     comp.name(mem_name);
     comp.pretty_name(mem_name);
+    comp.set_access("internal");
 
     // update struct type component
     t.components().push_back(comp);
@@ -3634,7 +3697,7 @@ bool solidity_convertert::get_tuple_instance(
 
   // get type
   typet t = sym.type;
-  t.set("sol_type", "tuple_instance");
+  t.set("#sol_type", "tuple_instance");
   assert(t.id() == typet::id_struct);
 
   // get instance name,id
@@ -3662,12 +3725,26 @@ bool solidity_convertert::get_tuple_instance(
   //? should we set the default value as zero?
 
   exprt inits = gen_zero(t);
-  assert(ast_node["components"].size() == inits.operands().size());
   auto &args = ast_node["components"];
-  for (unsigned int i = 0; i < inits.operands().size() && i < args.size(); i++)
+
+  unsigned int i = 0;
+  unsigned int j = 0;
+  unsigned is = inits.operands().size();
+  unsigned as = args.size();
+  assert(is <= as);
+
+  while (i < is && j < as)
   {
+    if (args.at(j).is_null())
+    {
+      ++j;
+      continue;
+    }
+
     exprt init;
-    if (get_expr(args.at(i), args.at(i)["typeDescriptions"], init))
+    const nlohmann::json &litera_type = args.at(j)["typeDescriptions"];
+
+    if (get_expr(args.at(j), litera_type, init))
       return true;
 
     const struct_union_typet::componentt *c =
@@ -3676,11 +3753,14 @@ bool solidity_convertert::get_tuple_instance(
 
     solidity_gen_typecast(ns, init, elem_type);
     inits.operands().at(i) = init;
+
+    // update
+    ++i;
+    ++j;
   }
 
   added_symbol.value = inits;
-  code_declt decl(symbol_expr(added_symbol));
-  new_expr = decl;
+  new_expr = added_symbol.value;
 
   return false;
 }
@@ -3691,7 +3771,7 @@ void solidity_convertert::get_tuple_name(
   std::string &id)
 {
   std::string c_name;
-  name = "tuple#" + std::to_string(ast_node["id"].get<int>());
+  name = "tuple" + std::to_string(ast_node["id"].get<int>());
   id = prefix + "struct " + name;
 }
 
@@ -3701,11 +3781,10 @@ bool solidity_convertert::get_tuple_instance_name(
   std::string &id)
 {
   std::string c_name;
-  if (get_current_contract_name(ast_node, c_name))
+  if (current_contractName.empty())
     return true;
-  if (c_name.empty())
-    return true;
-  name = "tuple_instance#" + std::to_string(ast_node["id"].get<int>());
+
+  name = "tuple_instance" + std::to_string(ast_node["id"].get<int>());
   id = "sol:@C" + c_name + "@" + name;
   return false;
 }
@@ -4154,12 +4233,16 @@ solidity_convertert::get_src_from_json(const nlohmann::json &ast_node)
     assert(ast_node.contains("subExpr"));
     assert(ast_node["subExpr"].contains("src"));
     return ast_node["subExpr"]["src"].get<std::string>();
-    break;
+  }
+  case SolidityGrammar::ExpressionT::NullExpr:
+  {
+    // empty address
+    return "0:0:0";
   }
   default:
   {
     assert(!"Unsupported node type when getting src from JSON");
-    return "";
+    abort();
   }
   }
 }
