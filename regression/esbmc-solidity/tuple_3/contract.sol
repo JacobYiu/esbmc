@@ -10,10 +10,10 @@ contract Base {
     uint y;
     tuple1 xx;
     constructor() {
-        (, y) = (1, 2);
+        (x, y) = (1, 2);
     }
 
     function name() public {
-        assert(y != 2);
+        assert(y == 2);
     }
 }
