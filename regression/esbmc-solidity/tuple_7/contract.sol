@@ -14,7 +14,7 @@ contract Base {
     }
 
     function test() public {
-        (x, y, x, y) = (y, x, 1, 2);
+        ((x, y), x, y) = ((1,2), y, x);
         assert(x == 1);
         assert(y == 2);
     }

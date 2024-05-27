@@ -866,8 +866,7 @@ bool solidity_convertert::get_function_definition(
       return true;
     if (get_tuple_instance(*current_functionDecl, dump))
       return true;
-    type.return_type().set(
-      "#sol_tuple_id", dump.identifier().as_string());
+    type.return_type().set("#sol_tuple_id", dump.identifier().as_string());
   }
 
   // 5. Check fd.isVariadic(), fd.isInlined()
@@ -2526,6 +2525,11 @@ bool solidity_convertert::get_binary_operator_expr(
       if (rt.get("#sol_type") == "tuple_instance")
       {
         // e.g. (x,y) = (1,2); (x,y) = (func(),x);
+        // =>
+        //  t.mem0 = 1; #1
+        //  t.mem1 = 2; #2
+        //  x = t.mem0; #3
+        //  y = t.mem1; #4
 
         unsigned int i = 0;
         unsigned int j = 0;
@@ -2533,7 +2537,27 @@ bool solidity_convertert::get_binary_operator_expr(
         unsigned int rs = to_struct_type(rhs.type()).components().size();
         assert(ls <= rs);
 
-        //constuct assignment
+        // do #1 #2
+        while (i < rs)
+        {
+          exprt lop;
+          if (get_tuple_member_call(
+                rhs.identifier(),
+                to_struct_type(rhs.type()).components().at(i),
+                lop))
+            return true;
+
+          exprt rop = rhs.operands().at(i);
+          //do assignment
+          get_tuple_assignment(_block, lop, rop);
+          // update counter
+          ++i;
+        }
+
+        // reset
+        i = 0;
+
+        // do #3 #4
         while (i < ls && j < rs)
         {
           // construct assignemnt
@@ -2544,7 +2568,7 @@ bool solidity_convertert::get_binary_operator_expr(
 
           if (get_tuple_member_call(
                 rhs.identifier(),
-                to_struct_type(rhs.type()).components().at(i),
+                to_struct_type(rhs.type()).components().at(j),
                 rop))
             return true;
           
@@ -2611,7 +2635,7 @@ bool solidity_convertert::get_binary_operator_expr(
       {
         // assume lhs should always be a symbol type
         irep_idt id = assign.op0().op0().identifier();
-        if (assigned_symbol.count(id))
+        if (!id.empty() && assigned_symbol.count(id))
           // e.g. (x,x) = (1, 2); x==1 hold
           continue;
         assigned_symbol.insert(id);
@@ -3784,6 +3808,7 @@ bool solidity_convertert::get_tuple_definition(const nlohmann::json &ast_node)
                  : ast_node["returnParameters"]["parameters"];
 
   // populate params
+  //TODO: flatten the nested tuple (e.g. ((x,y),z) = (func(),1); )
   unsigned int counter = 0;
   for (const auto &arg : args.items())
   {
@@ -3975,23 +4000,14 @@ bool solidity_convertert::get_tuple_member_call(
   const exprt &comp,
   exprt &new_expr)
 {
-  // tupleinstance
-  log_status("{}",comp);
+  // tuple_instance
   assert(!instance_id.empty());
   exprt base;
-  log_status("{}",instance_id.as_string());
   if (context.find_symbol(instance_id) == nullptr)
     return true;
-  log_status("find");
+
   base = symbol_expr(*context.find_symbol(instance_id));
-  // base.type().clear();
-  // base.type().id("symbol");
-  // base.type().identifier(prefix + comp.type().get("#member_name").as_string());
-
   new_expr = member_exprt(base, comp.name(), comp.type());
-
-  log_status("nnew  {}", new_expr);
-
   return false;
 }
 
@@ -4010,44 +4026,6 @@ void solidity_convertert::get_tuple_assignment(
   const exprt &lop,
   exprt rop)
 {
-  if (lop.type().id() == typet::t_struct)
-  {
-    // this means nested tuple
-    assert(lop.type().get("sol_type").as_string() == "tuple");
-    log_status("rrop{}", rop);
-    if (rop.id() == "sideeffect")
-    {
-      // add function call
-      get_tuple_function_call(_block, rop);
-
-      // e.g. (x, (x, y)) = (x, func());
-      // => (x, (x,y)) = (x, (tuple.mem0, tuple.mem1))
-      assert(!rop.type().get("#sol_tuple_id").empty());
-      std::string tid = rop.type().get("#sol_tuple_id").as_string();
-      exprt tuple_expr = symbol_expr(*context.find_symbol(tid));
-      rop = tuple_expr;
-    }
-    // e.g. (x, (x,y)) = (1, (2,x));
-
-    unsigned int ls = to_struct_type(lop.type()).components().size();
-
-    for (unsigned int i = 0; i < ls; i++)
-    {
-      exprt lop_sub = lop.operands().at(i);
-      exprt rops_sub;
-      assert(!rop.identifier().empty());
-      if (get_tuple_member_call(
-            rop.identifier(),
-            to_struct_type(rop.type()).components().at(i),
-            rops_sub))
-      {
-        log_error("get tuple membercall error");
-        abort();
-      }
-      get_tuple_assignment(_block, lop_sub, rops_sub);
-    }
-  }
-
   exprt assign_expr = side_effect_exprt("assign", lop.type());
   assign_expr.copy_to_operands(lop, rop);
 
